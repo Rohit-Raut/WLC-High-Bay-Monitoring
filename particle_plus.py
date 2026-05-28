@@ -310,18 +310,30 @@ def generate_dashboard_html(csv_path, output_path):
             reader = csv.DictReader(f)
             rows = list(reader)
 
-    # filter last 7 days
+    # filter last 7 days — try counter date/time, then sync_time/snapshot_time fallback
     cutoff = datetime.now() - timedelta(days=7)
     recent = []
     for row in rows:
-        try:
-            dt = datetime.strptime(
-                f"{row.get('date','')} {row.get('time','')}".strip(),
-                '%Y-%m-%d %H:%M:%S')
-            if dt >= cutoff:
-                recent.append(row)
-        except Exception:
-            continue
+        dt = None
+        d = row.get('date', '').strip()
+        t = row.get('time', '').strip()
+        if d and t:
+            try:
+                dt = datetime.strptime(f"{d} {t}", '%Y-%m-%d %H:%M:%S')
+            except Exception:
+                pass
+        if dt is None:
+            for ts_key in ('sync_time', 'snapshot_time'):
+                ts_val = row.get(ts_key, '').strip()
+                if ts_val:
+                    try:
+                        dt = datetime.fromisoformat(ts_val)
+                        break
+                    except Exception:
+                        pass
+        # include if timestamp is recent, or if no timestamp at all (unknown age)
+        if dt is None or dt >= cutoff:
+            recent.append(row)
 
     log(f"Dashboard: {len(recent)} records in last 7 days")
 
@@ -350,7 +362,27 @@ def generate_dashboard_html(csv_path, output_path):
         return round(c * 9/5 + 32, 1) if c is not None else None
 
     # ── extract data ──────────────────────────────────────────────────────────
-    timestamps = [f"{r.get('date','')} {r.get('time','')}" for r in recent]
+    def get_display_ts(r, fallback_dt):
+        d = r.get('date', '').strip()
+        t = r.get('time', '').strip()
+        if d and t:
+            return f"{d} {t}"
+        for key in ('sync_time', 'snapshot_time'):
+            ts_val = r.get(key, '').strip()
+            if ts_val:
+                try:
+                    return datetime.fromisoformat(ts_val).strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    pass
+        return fallback_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    # for records with no timestamp, estimate: most recent = now, spaced HOLD_TIME_S apart
+    now_dt = datetime.now()
+    n_rec = len(recent)
+    timestamps = [
+        get_display_ts(r, now_dt - timedelta(seconds=HOLD_TIME_S * (n_rec - 1 - i)))
+        for i, r in enumerate(recent)
+    ]
 
     ch_colors = ['#00b4d8', '#2ecc71', '#e74c3c', '#f39c12', '#9b59b6', '#1abc9c']
     pm_colors = ['#ff6b6b', '#ff9f43', '#ffd32a', '#0be881', '#67e8f9', '#c084fc']
@@ -821,6 +853,7 @@ def mode_sync(client=None):
                 latch_record(client, i)
                 data = read_latched_record(client)
                 if data:
+                    data['sync_time'] = datetime.now().isoformat()
                     records.append(data)
                     log(f"  [{i:4d}/{total}] "
                         f"{data.get('date','?')} {data.get('time','?')} | "
