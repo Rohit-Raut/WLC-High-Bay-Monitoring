@@ -480,6 +480,8 @@ def generate_dashboard_html(csv_path, output_path):
     ch2_pm_js     = json.dumps(ch_pm[2])
     ch1_lbl       = ch_sizes.get(1, '0.3')
     ch2_lbl       = ch_sizes.get(2, '0.5')
+    temp_f_js     = json.dumps(temp_f)
+    rh_js         = json.dumps(rh_vals)
 
     updated = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -619,7 +621,7 @@ def generate_dashboard_html(csv_path, output_path):
     <div id="chart-dist" style="height:280px"></div>
   </div>
   <div class="chart-panel">
-    <div class="chart-title">&#8805;{ch1_lbl}&#956;m Counts &amp; PM&#8805;{ch2_lbl}&#956;m Over Time &nbsp;(most sensitive channel)</div>
+    <div class="chart-title">Temperature &amp; Humidity Over Time</div>
     <div id="chart-env" style="height:280px"></div>
   </div>
 </div>
@@ -631,6 +633,8 @@ const PM     = {pm_traces_js};
 const DIST   = {dist_traces_js};
 const CH1_C  = {ch1_counts_js};
 const CH2_PM = {ch2_pm_js};
+const TEMP_F = {temp_f_js};
+const RH_VALS = {rh_js};
 
 const DARK = {{
   paper_bgcolor: '#0f172a',
@@ -687,16 +691,16 @@ function filterAndRender() {{
     }}), {{responsive: true, displaylogo: false}});
 
   Plotly.react('chart-env', [
-    {{ x: ts, y: CH1_C.slice(i),  name: '\u2265{ch1_lbl}\u00b5m counts',
-       type: 'scatter', mode: 'lines',
-       line: {{ color: '#00b4d8', width: 2 }}, yaxis: 'y' }},
-    {{ x: ts, y: CH2_PM.slice(i), name: 'PM\u2265{ch2_lbl}\u00b5m (\u03bcg/m\u00b3)',
-       type: 'scatter', mode: 'lines',
-       line: {{ color: '#f39c12', width: 1.5, dash: 'dash' }}, yaxis: 'y2' }},
+    {{ x: ts, y: TEMP_F.slice(i),  name: 'Temperature (\u00b0F)',
+       type: 'scatter', mode: 'lines+markers',
+       line: {{ color: '#ff6b6b', width: 2 }}, yaxis: 'y' }},
+    {{ x: ts, y: RH_VALS.slice(i), name: 'Humidity (%)',
+       type: 'scatter', mode: 'lines+markers',
+       line: {{ color: '#4ecdc4', width: 2 }}, yaxis: 'y2' }},
   ], Object.assign({{}}, DARK, {{
     xaxis:  Object.assign({{}}, DARK.xaxis,  {{ title: '' }}),
-    yaxis:  Object.assign({{}}, DARK.yaxis,  {{ title: '\u2265{ch1_lbl}\u00b5m counts (log)', type: 'log' }}),
-    yaxis2: {{ title: 'PM\u2265{ch2_lbl}\u00b5m (\u03bcg/m\u00b3)',
+    yaxis:  Object.assign({{}}, DARK.yaxis,  {{ title: 'Temperature (\u00b0F)' }}),
+    yaxis2: {{ title: 'Humidity (%)',
                overlaying: 'y', side: 'right',
                gridcolor: '#1e293b', linecolor: '#334155',
                tickfont: {{ color: '#6b7280', size: 10 }},
