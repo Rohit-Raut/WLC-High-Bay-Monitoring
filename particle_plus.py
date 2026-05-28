@@ -845,22 +845,41 @@ def mode_sync(client=None):
         total = get_record_count(client)
         log(f"Records on counter: {total}")
 
-        if total < MIN_RECORDS_TO_SYNC:
+        # find the highest record_number already saved so we only pull NEW records
+        last_saved = 0
+        if os.path.exists(OUTPUT_CSV):
+            with open(OUTPUT_CSV, 'r') as f:
+                for row in csv.DictReader(f):
+                    try:
+                        n = int(float(row.get('record_number', 0) or 0))
+                        if n > last_saved:
+                            last_saved = n
+                    except (ValueError, TypeError):
+                        pass
+
+        if last_saved >= total:
+            log(f"Already up to date (saved up to record {last_saved}, counter has {total})")
+            return True
+
+        start    = last_saved + 1
+        n_new    = total - last_saved
+        log(f"New records to sync: {n_new}  (records {start}–{total})")
+
+        if n_new < MIN_RECORDS_TO_SYNC:
             log("Below sync threshold, skipping")
             return True
 
         records = []
         failed  = []
 
-        for i in range(1, total + 1):
+        for i in range(start, total + 1):
             try:
                 latch_record(client, i)
                 data = read_latched_record(client)
                 if data:
                     data['sync_time'] = datetime.now().isoformat()
                     records.append(data)
-                    log(f"  [{i:4d}/{total}] "
-                        f"{data.get('date','?')} {data.get('time','?')} | "
+                    log(f"  [{i:4d}/{total}] (new {i-last_saved}/{n_new}) "
                         f"temp={data.get('temp_C','?')}C "
                         f"ch1={data.get('ch1_diff_m3','?')}/m³")
                 else:
