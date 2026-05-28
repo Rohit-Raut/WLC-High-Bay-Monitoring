@@ -1,6 +1,6 @@
 from pymodbus.client import ModbusTcpClient
 
-client = ModbusTcpClient('10.66.114.55', port=502, timeout=5)
+client = ModbusTcpClient('10.66.66.68', port=502, timeout=5)
 client.connect()
 
 r = client.read_holding_registers(address=8000, count=2)

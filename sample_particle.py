@@ -4,7 +4,7 @@ import csv
 import time
 from datetime import datetime
 
-COUNTER_IP = '10.66.114.55'
+COUNTER_IP = '10.66.66.68'
 PORT = 502
 POLL_INTERVAL = 5  # seconds between readings
 OUTPUT_CSV = 'particle_data.csv'

@@ -22,10 +22,10 @@ from pymodbus.client import ModbusTcpClient
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 
-COUNTER_IP   = '10.66.114.55'
+COUNTER_IP   = '10.66.66.68'
 PORT         = 502
 
-BASE_DIR     = '/home/rraut/particle_plus'
+BASE_DIR     = '/home/rraut/particle_plus/dashboard'   # git repo = working dir
 OUTPUT_CSV   = f'{BASE_DIR}/particle_data_archive.csv'
 LIVE_CSV     = f'{BASE_DIR}/particle_data_live.csv'
 LOG_FILE     = f'{BASE_DIR}/sync_log.txt'
@@ -40,11 +40,16 @@ CYCLES              = 1       # 1 sample per cycle then hold
 ERASE_AFTER_SYNC    = False   # set True after verifying data
 MIN_RECORDS_TO_SYNC = 1
 
-# github
-GITHUB_REPO_DIR     = f'{BASE_DIR}/dashboard'   # local clone of your repo
+# github — script lives inside the repo, so repo dir = BASE_DIR
+GITHUB_REPO_DIR     = BASE_DIR
 GITHUB_BRANCH       = 'main'
 GITHUB_REMOTE       = 'origin'
 
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ─── CONNECTION STATE ─────────────────────────────────────────────────────────
+_counter_online = True
+_last_seen      = None   # datetime of last successful data pull
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -290,241 +295,381 @@ def erase_counter(client):
 
 def generate_dashboard_html(csv_path, output_path):
     """
-    Read last 24hrs of CSV data and generate a self-contained
-    HTML file with Plotly charts. No server needed — pure static HTML.
+    Read last 7 days of CSV data and generate a self-contained static HTML
+    dashboard matching the dashboard.py visual design for GitHub Pages.
     """
-    # read CSV
+    import json
+
+    # ── read CSV ──────────────────────────────────────────────────────────────
     rows = []
     if os.path.exists(csv_path):
         with open(csv_path, 'r') as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                rows.append(row)
+            rows = list(reader)
 
-    # filter last 24 hours
-    cutoff = datetime.now() - timedelta(hours=24)
+    # filter last 7 days
+    cutoff = datetime.now() - timedelta(days=7)
     recent = []
     for row in rows:
         try:
-            dt_str = f"{row.get('date','')} {row.get('time','')}"
-            dt = datetime.strptime(dt_str.strip(), '%Y-%m-%d %H:%M:%S')
+            dt = datetime.strptime(
+                f"{row.get('date','')} {row.get('time','')}".strip(),
+                '%Y-%m-%d %H:%M:%S')
             if dt >= cutoff:
                 recent.append(row)
         except Exception:
             continue
 
-    log(f"Dashboard: {len(recent)} records in last 24hrs")
+    log(f"Dashboard: {len(recent)} records in last 7 days")
 
-    # build data arrays for javascript
-    def safe_float(val):
+    # ── helpers ───────────────────────────────────────────────────────────────
+    def sf(val):
         try:
-            return float(val) if val not in (None, '', 'None') else 'null'
+            return float(val) if val not in (None, '', 'None') else None
         except Exception:
-            return 'null'
+            return None
 
+    def latest_val(key):
+        for r in reversed(recent):
+            v = sf(r.get(key))
+            if v is not None:
+                return v
+        return None
+
+    def latest_bool(key):
+        for r in reversed(recent):
+            v = r.get(key)
+            if v not in (None, '', 'None'):
+                return str(v).lower() in ('true', '1', 'yes')
+        return None
+
+    def c_to_f(c):
+        return round(c * 9/5 + 32, 1) if c is not None else None
+
+    # ── extract data ──────────────────────────────────────────────────────────
     timestamps = [f"{r.get('date','')} {r.get('time','')}" for r in recent]
-    temp       = [safe_float(r.get('temp_C'))    for r in recent]
-    rh         = [safe_float(r.get('RH_pct'))    for r in recent]
 
-    channels = {}
-    for ch in ['ch1','ch2','ch3','ch4','ch5','ch6']:
-        channels[ch] = {
-            'size'     : recent[0].get(f'{ch}_size_um', '?') if recent else '?',
-            'diff_m3'  : [safe_float(r.get(f'{ch}_diff_m3'))  for r in recent],
-            'sum_m3'   : [safe_float(r.get(f'{ch}_sum_m3'))   for r in recent],
-        }
+    ch_colors = ['#00b4d8', '#2ecc71', '#e74c3c', '#f39c12', '#9b59b6', '#1abc9c']
+    pm_colors = ['#ff6b6b', '#ff9f43', '#ffd32a', '#0be881', '#67e8f9', '#c084fc']
 
-    # format as JS arrays
-    ts_js = str(timestamps).replace("'", '"')
+    ref = recent[0] if recent else {}
+    ch_sizes = {}
+    for i in range(1, 7):
+        sz = sf(ref.get(f'ch{i}_size_um'))
+        ch_sizes[i] = f'{sz:.1f}' if sz is not None else str(i)
 
-    ch_traces = ''
-    for ch, vals in channels.items():
-        ch_traces += f"""
-        {{
-            x: {ts_js},
-            y: {vals['diff_m3']},
-            name: '{ch} (≥{vals["size"]}µm) diff/m³',
-            type: 'scatter',
-            mode: 'lines+markers',
-            line: {{width: 1.5}},
-            marker: {{size: 4}}
-        }},"""
+    ch_counts = {i: [sf(r.get(f'ch{i}_diff_counts')) for r in recent] for i in range(1, 7)}
+    ch_pm     = {i: [sf(r.get(f'ch{i}_pm_ugm3'))     for r in recent] for i in range(1, 7)}
+    temp_f    = [c_to_f(sf(r.get('temp_C')))  for r in recent]
+    rh_vals   = [sf(r.get('RH_pct'))           for r in recent]
+    flow_vals = [sf(r.get('flow_CFM'))         for r in recent]
+
+    # ── status strip ──────────────────────────────────────────────────────────
+    lv_temp_c = latest_val('temp_C')
+    last_temp_f = f'{c_to_f(lv_temp_c):.1f}' if lv_temp_c is not None else '—'
+    lv_rh   = latest_val('RH_pct')
+    last_rh = f'{lv_rh:.1f}'  if lv_rh  is not None else '—'
+    lv_flow = latest_val('flow_CFM')
+    last_flow = f'{lv_flow:.4f}' if lv_flow is not None else '—'
+    last_ts   = timestamps[-1] if timestamps else '—'
+    n_samples = len(recent)
+
+    laser_ok = latest_bool('laser_ok')
+    flow_ok  = latest_bool('flow_ok')
+    temp_ok  = latest_bool('temp_ok')
+    rh_ok    = latest_bool('rh_ok')
+
+    def flag_span(label, ok):
+        cls = '' if ok is None else ('ok' if ok else 'fail')
+        txt = '—' if ok is None else ('OK' if ok else 'FAULT')
+        return (f'<div class="kv"><span class="k">{label}: </span>'
+                f'<span class="v {cls}">{txt}</span></div>')
+
+    def kv_span(k, v):
+        return (f'<div class="kv"><span class="k">{k}: </span>'
+                f'<span class="v">{v}</span></div>')
+
+    status_strip_html = (
+        kv_span('Flow', f'{last_flow} CFM') +
+        kv_span('Samples', str(n_samples)) +
+        kv_span('Last sample', last_ts) +
+        flag_span('Laser', laser_ok) +
+        flag_span('Flow',  flow_ok)  +
+        flag_span('Temp',  temp_ok)  +
+        flag_span('RH',    rh_ok)
+    )
+
+    env_cards_html = ''.join(
+        f'<div class="card" style="border-top:3px solid {c}">'
+        f'<div class="card-label">{lab}</div>'
+        f'<span class="card-val" style="color:{c}">{val}</span>'
+        f'<span class="card-unit">{unit}</span></div>'
+        for (lab, val, unit), c in zip(
+            [('Temperature', last_temp_f, '°F'),
+             ('Humidity',    last_rh,     '%'),
+             ('Flow Rate',   last_flow,   'CFM')],
+            ['#ff6b6b', '#4ecdc4', '#45b7d1'])
+    )
+
+    # ── pre-serialise all JS data (avoids f-string brace escaping) ────────────
+    ts_js            = json.dumps(timestamps)
+    counts_traces_js = json.dumps([
+        {'x': timestamps, 'y': ch_counts[i],
+         'name': f'\u2265{ch_sizes[i]}\u00b5m',
+         'type': 'scatter', 'mode': 'lines',
+         'line': {'color': ch_colors[i-1], 'width': 2}}
+        for i in range(1, 7)
+    ])
+    pm_traces_js = json.dumps([
+        {'x': timestamps, 'y': ch_pm[i],
+         'name': f'PM\u2265{ch_sizes[i]}\u00b5m',
+         'type': 'scatter', 'mode': 'lines',
+         'line': {'color': pm_colors[i-1], 'width': 2}}
+        for i in range(1, 7)
+    ])
+    raw_latest = [
+        next((sf(r.get(f'ch{i}_diff_counts')) for r in reversed(recent)
+              if sf(r.get(f'ch{i}_diff_counts')) is not None), 0.0) or 0.0
+        for i in range(1, 7)
+    ]
+    dist_traces_js = json.dumps([{
+        'x': [f'\u2265{ch_sizes[i]}\u00b5m' for i in range(1, 7)],
+        'y': [max(v, 0.5) for v in raw_latest],
+        'type': 'bar',
+        'marker': {'color': ch_colors, 'line': {'color': '#334155', 'width': 1}},
+        'text': [str(int(v)) if v > 0 else '0' for v in raw_latest],
+        'textposition': 'outside',
+        'textfont': {'color': '#9ca3af', 'size': 11},
+    }])
+    ch1_counts_js = json.dumps(ch_counts[1])
+    ch2_pm_js     = json.dumps(ch_pm[2])
+    ch1_lbl       = ch_sizes.get(1, '0.3')
+    ch2_lbl       = ch_sizes.get(2, '0.5')
 
     updated = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+    # ── connection banner ─────────────────────────────────────────────────────
+    if _counter_online:
+        conn_banner = ''
+    else:
+        last_seen_str = (_last_seen.strftime('%Y-%m-%d %H:%M:%S')
+                         if _last_seen else 'unknown')
+        conn_banner = (
+            '<div style="background:#7f1d1d;border:1px solid #991b1b;'
+            'color:#fca5a5;border-radius:6px;padding:10px 16px;'
+            'margin-bottom:16px;font-size:13px;">'
+            f'&#9888; Particle counter OFFLINE &mdash; '
+            f'last connected: {last_seen_str} &mdash; '
+            'retrying every 30 min. Showing last recorded data.</div>'
+        )
+
+    # ── HTML ──────────────────────────────────────────────────────────────────
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="refresh" content="1800">  <!-- auto-refresh every 30min -->
-<title>Wright Lab — Particle Counter Dashboard</title>
-<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="1800">
+<title>Wright Lab &#8212; DUNE Clean Room Monitor</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <style>
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{
-    font-family: 'Segoe UI', sans-serif;
-    background: #0d1117;
-    color: #c9d1d9;
-    margin: 0;
-    padding: 20px;
+    background: #030712;
+    color: #d1d5db;
+    font-family: 'Courier New', Courier, monospace;
+    padding: 20px 28px 40px;
+    min-height: 100vh;
   }}
-  h1 {{
-    color: #58a6ff;
-    border-bottom: 1px solid #30363d;
-    padding-bottom: 10px;
-  }}
-  .subtitle {{
-    color: #8b949e;
-    font-size: 0.9em;
-    margin-top: -10px;
-    margin-bottom: 20px;
-  }}
-  .card {{
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 15px;
-    margin-bottom: 20px;
-  }}
-  .updated {{
-    color: #8b949e;
-    font-size: 0.8em;
-    text-align: right;
-  }}
-  .status-grid {{
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 10px;
-    margin-bottom: 20px;
-  }}
-  .stat {{
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 15px;
-    text-align: center;
-  }}
-  .stat-value {{
-    font-size: 2em;
+  .header {{ margin-bottom: 20px; border-bottom: 1px solid #1f2937; padding-bottom: 14px; }}
+  .header h1 {{
+    color: #38bdf8;
+    font-size: 18px;
+    letter-spacing: 3px;
     font-weight: bold;
-    color: #58a6ff;
+    margin-bottom: 3px;
   }}
-  .stat-label {{
-    font-size: 0.8em;
-    color: #8b949e;
-    margin-top: 4px;
+  .header .sub {{ color: #6b7280; font-size: 11px; letter-spacing: 1px; }}
+  .controls {{
+    display: flex; gap: 16px; align-items: flex-end;
+    flex-wrap: wrap; margin-bottom: 14px;
   }}
+  .ctrl-group label {{
+    display: block; font-size: 10px; color: #6b7280;
+    letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px;
+  }}
+  select {{
+    background: #111827; color: #d1d5db; border: 1px solid #374151;
+    border-radius: 5px; padding: 6px 10px; font-size: 13px;
+    font-family: inherit; cursor: pointer; min-width: 180px;
+  }}
+  select:focus {{ outline: none; border-color: #38bdf8; }}
+  .updated {{ font-size: 11px; color: #4b5563; align-self: flex-end; padding-bottom: 6px; }}
+  .status-strip {{
+    display: flex; gap: 20px; flex-wrap: wrap;
+    background: #0f172a; border: 1px solid #1f2937;
+    border-radius: 7px; padding: 10px 18px;
+    margin-bottom: 14px; font-size: 12px;
+  }}
+  .kv .k {{ color: #6b7280; }}
+  .kv .v {{ font-weight: bold; color: #d1d5db; }}
+  .kv .ok   {{ color: #4ade80; }}
+  .kv .fail {{ color: #f87171; }}
+  .cards {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }}
+  .card {{
+    flex: 1; min-width: 120px; background: #0f172a;
+    border: 1px solid #1f2937; border-radius: 7px; padding: 12px 16px;
+  }}
+  .card .card-label {{
+    font-size: 10px; color: #6b7280; text-transform: uppercase;
+    letter-spacing: 1.2px; margin-bottom: 6px;
+  }}
+  .card .card-val {{ font-size: 26px; font-weight: bold; line-height: 1; }}
+  .card .card-unit {{ font-size: 12px; color: #6b7280; margin-left: 3px; }}
+  .chart-panel {{
+    background: #0f172a; border: 1px solid #1f2937;
+    border-radius: 8px; padding: 14px 14px 6px; margin-bottom: 12px;
+  }}
+  .chart-title {{
+    font-size: 10px; color: #6b7280; text-transform: uppercase;
+    letter-spacing: 1.5px; margin-bottom: 6px;
+  }}
+  .row2 {{ display: flex; gap: 12px; margin-bottom: 12px; }}
+  .row2 .chart-panel {{ flex: 1; margin-bottom: 0; }}
 </style>
 </head>
 <body>
 
-<h1>🔬 Wright Lab — Particle Counter</h1>
-<p class="subtitle">
-  Particles Plus 7000 Series | Last 24 hours | 
-  Sampling every 30 minutes
-</p>
-
-<!-- Status cards -->
-<div class="status-grid">
-  <div class="stat">
-    <div class="stat-value" id="last-temp">--</div>
-    <div class="stat-label">Temperature (°C)</div>
-  </div>
-  <div class="stat">
-    <div class="stat-value" id="last-rh">--</div>
-    <div class="stat-label">Humidity (%)</div>
-  </div>
-  <div class="stat">
-    <div class="stat-value">{len(recent)}</div>
-    <div class="stat-label">Samples (24hr)</div>
-  </div>
-  <div class="stat">
-    <div class="stat-value" id="last-ch1">--</div>
-    <div class="stat-label">Latest ch1 /m³</div>
-  </div>
+<div class="header">
+  <h1>WRIGHT LAB &#8212; HIGH BAY DUNE CLEAN ROOM MONITORING</h1>
+  <div class="sub">Particle Plus Model 7301 &nbsp;&middot;&nbsp; Real-time Particulate &amp; Environmental Dashboard</div>
 </div>
 
-<!-- Particle counts chart -->
-<div class="card">
-  <div id="plot-particles" style="height:450px;"></div>
+{conn_banner}
+
+<div class="controls">
+  <div class="ctrl-group">
+    <label>Time Range</label>
+    <select id="sel-range" onchange="filterAndRender()">
+      <option value="0">All data (7 days)</option>
+      <option value="30">Last 30 min</option>
+      <option value="60">Last 1 hr</option>
+      <option value="120">Last 2 hr</option>
+      <option value="180">Last 3 hr</option>
+      <option value="360">Last 6 hr</option>
+      <option value="720">Last 12 hr</option>
+      <option value="1440" selected>Last 24 hr</option>
+      <option value="4320">Last 3 days</option>
+    </select>
+  </div>
+  <div class="updated">Last pushed: {updated}</div>
 </div>
 
-<!-- Temperature + RH chart -->
-<div class="card">
-  <div id="plot-env" style="height:300px;"></div>
+<div class="status-strip">{status_strip_html}</div>
+<div class="cards">{env_cards_html}</div>
+
+<div class="chart-panel">
+  <div class="chart-title">Particle Counts Over Time &nbsp;&#8212; all 6 size channels (log scale, counts / sample)</div>
+  <div id="chart-counts" style="height:360px"></div>
 </div>
 
-<p class="updated">Last updated: {updated} (UTC) — auto-refreshes every 30 min</p>
+<div class="chart-panel">
+  <div class="chart-title">PM Mass Concentration Over Time &nbsp;(&#956;g / m&#179;)</div>
+  <div id="chart-pm" style="height:300px"></div>
+</div>
+
+<div class="row2">
+  <div class="chart-panel">
+    <div class="chart-title">Latest Particle Size Distribution &nbsp;(most recent sample)</div>
+    <div id="chart-dist" style="height:280px"></div>
+  </div>
+  <div class="chart-panel">
+    <div class="chart-title">&#8805;{ch1_lbl}&#956;m Counts &amp; PM&#8805;{ch2_lbl}&#956;m Over Time &nbsp;(most sensitive channel)</div>
+    <div id="chart-env" style="height:280px"></div>
+  </div>
+</div>
 
 <script>
-const timestamps = {ts_js};
-const temp       = {temp};
-const rh         = {rh};
+const TS     = {ts_js};
+const COUNTS = {counts_traces_js};
+const PM     = {pm_traces_js};
+const DIST   = {dist_traces_js};
+const CH1_C  = {ch1_counts_js};
+const CH2_PM = {ch2_pm_js};
 
-// update stat cards with most recent values
-if (temp.length > 0)  document.getElementById('last-temp').innerText =
-    temp.filter(v => v !== null).slice(-1)[0] ?? '--';
-if (rh.length > 0)    document.getElementById('last-rh').innerText =
-    rh.filter(v => v !== null).slice(-1)[0] ?? '--';
-
-// particle counts plot
-const particleTraces = [{ch_traces}];
-
-const particleLayout = {{
-  title: 'Particle Counts (differential, per m³) — Last 24 Hours',
-  paper_bgcolor: '#161b22',
-  plot_bgcolor:  '#0d1117',
-  font:   {{color: '#c9d1d9'}},
-  xaxis:  {{gridcolor: '#30363d', title: 'Time'}},
-  yaxis:  {{gridcolor: '#30363d', title: 'Particles / m³'}},
-  legend: {{bgcolor: '#161b22', bordercolor: '#30363d', borderwidth: 1}},
-  margin: {{t: 50, b: 80, l: 80, r: 20}}
+const DARK = {{
+  paper_bgcolor: '#0f172a',
+  plot_bgcolor:  '#0f172a',
+  font:      {{ color: '#9ca3af', family: 'Courier New, monospace', size: 11 }},
+  margin:    {{ l: 60, r: 20, t: 30, b: 50 }},
+  hovermode: 'x unified',
+  hoverlabel: {{ bgcolor: '#1e293b', bordercolor: '#334155', font: {{ size: 11 }} }},
+  legend: {{ bgcolor: 'rgba(0,0,0,0)', bordercolor: '#334155', borderwidth: 1,
+             font: {{ size: 11 }}, orientation: 'h', yanchor: 'bottom', y: 1.02, x: 0 }},
+  xaxis: {{ gridcolor: '#1e293b', linecolor: '#334155', zerolinecolor: '#1e293b',
+           tickfont: {{ color: '#6b7280', size: 10 }},
+           title_font: {{ color: '#6b7280', size: 11 }} }},
+  yaxis: {{ gridcolor: '#1e293b', linecolor: '#334155', zerolinecolor: '#1e293b',
+           tickfont: {{ color: '#6b7280', size: 10 }},
+           title_font: {{ color: '#6b7280', size: 11 }} }},
 }};
 
-Plotly.newPlot('plot-particles', particleTraces, particleLayout,
-               {{responsive: true}});
+function sliceIdx(mins) {{
+  if (!mins || TS.length === 0) return 0;
+  const cut = new Date(new Date(TS[TS.length - 1]) - mins * 60000);
+  const i = TS.findIndex(t => new Date(t) >= cut);
+  return i < 0 ? TS.length - 1 : i;
+}}
 
-// update ch1 stat card
-const ch1vals = particleTraces[0]?.y ?? [];
-const lastCh1 = ch1vals.filter(v => v !== null).slice(-1)[0];
-if (lastCh1 !== undefined)
-  document.getElementById('last-ch1').innerText = lastCh1.toFixed(1);
+function sliceTraces(traces, i) {{
+  return traces.map(tr => Object.assign({{}}, tr, {{
+    x: tr.x.slice(i), y: tr.y.slice(i)
+  }}));
+}}
 
-// env plot
-const envTraces = [
-  {{
-    x: timestamps, y: temp,
-    name: 'Temperature (°C)',
-    type: 'scatter', mode: 'lines+markers',
-    line: {{color: '#ff7b72', width: 1.5}},
-    marker: {{size: 4}},
-    yaxis: 'y1'
-  }},
-  {{
-    x: timestamps, y: rh,
-    name: 'Humidity (%)',
-    type: 'scatter', mode: 'lines+markers',
-    line: {{color: '#79c0ff', width: 1.5}},
-    marker: {{size: 4}},
-    yaxis: 'y2'
-  }}
-];
+function filterAndRender() {{
+  const mins = parseInt(document.getElementById('sel-range').value);
+  const i    = sliceIdx(mins);
+  const ts   = TS.slice(i);
 
-const envLayout = {{
-  title: 'Temperature & Humidity — Last 24 Hours',
-  paper_bgcolor: '#161b22',
-  plot_bgcolor:  '#0d1117',
-  font:   {{color: '#c9d1d9'}},
-  xaxis:  {{gridcolor: '#30363d'}},
-  yaxis:  {{gridcolor: '#30363d', title: 'Temperature (°C)',
-            titlefont: {{color: '#ff7b72'}}}},
-  yaxis2: {{title: 'Humidity (%)', titlefont: {{color: '#79c0ff'}},
-            overlaying: 'y', side: 'right', gridcolor: '#30363d'}},
-  legend: {{bgcolor: '#161b22'}},
-  margin: {{t: 50, b: 80, l: 80, r: 80}}
-}};
+  Plotly.react('chart-counts', sliceTraces(COUNTS, i),
+    Object.assign({{}}, DARK, {{
+      yaxis: Object.assign({{}}, DARK.yaxis, {{ title: 'Counts / sample', type: 'log' }}),
+      xaxis: Object.assign({{}}, DARK.xaxis, {{ title: '' }}),
+    }}), {{responsive: true, displaylogo: false}});
 
-Plotly.newPlot('plot-env', envTraces, envLayout, {{responsive: true}});
+  Plotly.react('chart-pm', sliceTraces(PM, i),
+    Object.assign({{}}, DARK, {{
+      yaxis: Object.assign({{}}, DARK.yaxis, {{ title: '\u03bcg / m\u00b3' }}),
+      xaxis: Object.assign({{}}, DARK.xaxis, {{ title: '' }}),
+    }}), {{responsive: true, displaylogo: false}});
+
+  Plotly.react('chart-dist', DIST,
+    Object.assign({{}}, DARK, {{
+      showlegend: false, bargap: 0.3,
+      yaxis: Object.assign({{}}, DARK.yaxis, {{ title: 'Counts', type: 'log', range: [-0.5, null] }}),
+      xaxis: Object.assign({{}}, DARK.xaxis, {{ title: 'Particle Size' }}),
+    }}), {{responsive: true, displaylogo: false}});
+
+  Plotly.react('chart-env', [
+    {{ x: ts, y: CH1_C.slice(i),  name: '\u2265{ch1_lbl}\u00b5m counts',
+       type: 'scatter', mode: 'lines',
+       line: {{ color: '#00b4d8', width: 2 }}, yaxis: 'y' }},
+    {{ x: ts, y: CH2_PM.slice(i), name: 'PM\u2265{ch2_lbl}\u00b5m (\u03bcg/m\u00b3)',
+       type: 'scatter', mode: 'lines',
+       line: {{ color: '#f39c12', width: 1.5, dash: 'dash' }}, yaxis: 'y2' }},
+  ], Object.assign({{}}, DARK, {{
+    xaxis:  Object.assign({{}}, DARK.xaxis,  {{ title: '' }}),
+    yaxis:  Object.assign({{}}, DARK.yaxis,  {{ title: '\u2265{ch1_lbl}\u00b5m counts (log)', type: 'log' }}),
+    yaxis2: {{ title: 'PM\u2265{ch2_lbl}\u00b5m (\u03bcg/m\u00b3)',
+               overlaying: 'y', side: 'right',
+               gridcolor: '#1e293b', linecolor: '#334155',
+               tickfont: {{ color: '#6b7280', size: 10 }},
+               title_font: {{ color: '#6b7280', size: 11 }} }},
+  }}), {{responsive: true, displaylogo: false}});
+}}
+
+filterAndRender();
 </script>
 </body>
 </html>"""
@@ -610,11 +755,17 @@ def mode_sample():
     while True:
         client = connect()
         if client is None:
-            log(f"Retrying in 60s...")
-            time.sleep(60)
+            global _counter_online, _last_seen
+            _counter_online = False
+            log(f"Connection failed — pushing last-known dashboard, retrying in {HOLD_TIME_S}s...")
+            mode_dashboard()
+            time.sleep(HOLD_TIME_S)
             continue
 
         try:
+            global _counter_online, _last_seen
+            _counter_online = True
+
             if not params_written:
                 set_params(client)
                 params_written = True
@@ -629,6 +780,7 @@ def mode_sample():
 
             if completed:
                 mode_sync(client=client)
+                _last_seen = datetime.now()
                 mode_dashboard()
 
         except Exception as e:

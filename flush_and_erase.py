@@ -8,7 +8,7 @@ import os
 # ─── CONFIG ───────────────────────────────────────────────
 COUNTER_IP       = '10.66.66.68'
 PORT             = 502
-OUTPUT_CSV       = '/home/rraut/particle_plus/particle_data_archive.csv'
+OUTPUT_CSV       = '/home/rraut/particle_plus/dashboard/particle_data_archive.csv'
 ERASE_AFTER_SYNC = False   # set True only after confirming data looks correct
 # ──────────────────────────────────────────────────────────
 
