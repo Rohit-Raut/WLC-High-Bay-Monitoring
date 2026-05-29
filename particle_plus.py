@@ -379,14 +379,41 @@ def generate_dashboard_html(csv_path, output_path):
                     pass
         return None  # no fake fallback — records without real timestamps are excluded from charts
 
-    # only include records that have a real timestamp in the time-series charts
-    chart_records = []
+    # only include records that have a real timestamp (confirms they were actually synced)
+    chart_records = [r for r in recent if get_real_ts(r) is not None]
+
+    # The counter does NOT timestamp stored records — sync_time is when we READ the record,
+    # not when the measurement was taken. All records in one sync batch get sync_times
+    # within seconds of each other, which is meaningless as a time axis.
+    # Correct approach: anchor the LAST record to its sync_time, then space all previous
+    # records backward at HOLD_TIME_S (30 min) intervals — the actual sampling cadence.
     timestamps = []
-    for r in recent:
-        ts = get_real_ts(r)
-        if ts is not None:
-            chart_records.append(r)
-            timestamps.append(ts)
+    if chart_records:
+        last_r = chart_records[-1]
+        last_dt = None
+        for _k in ('sync_time', 'snapshot_time'):
+            _v = last_r.get(_k, '').strip()
+            if _v:
+                try:
+                    last_dt = datetime.fromisoformat(_v)
+                    break
+                except Exception:
+                    pass
+        if last_dt is None:
+            _raw = get_real_ts(last_r)
+            if _raw:
+                try:
+                    last_dt = datetime.strptime(_raw, '%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    pass
+        n_cr = len(chart_records)
+        if last_dt is not None:
+            timestamps = [
+                (last_dt - timedelta(seconds=HOLD_TIME_S * (n_cr - 1 - i))).strftime('%Y-%m-%d %H:%M:%S')
+                for i in range(n_cr)
+            ]
+        else:
+            timestamps = [get_real_ts(r) or '' for r in chart_records]
 
     ch_colors = ['#00b4d8', '#2ecc71', '#e74c3c', '#f39c12', '#9b59b6', '#1abc9c']
     pm_colors = ['#ff6b6b', '#ff9f43', '#ffd32a', '#0be881', '#67e8f9', '#c084fc']
