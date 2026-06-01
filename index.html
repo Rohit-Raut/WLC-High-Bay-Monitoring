@@ -39,6 +39,14 @@
   }
   select:focus { outline: none; border-color: #38bdf8; }
   .updated { font-size: 11px; color: #4b5563; align-self: flex-end; padding-bottom: 6px; }
+  .iso-wrap { align-self: flex-end; margin-bottom: 6px; }
+  .iso-lbl  { font-size: 10px; color: #6b7280; letter-spacing: 1px;
+               text-transform: uppercase; margin-bottom: 4px; }
+  .iso-badge {
+    display: inline-block; font-size: 14px; font-weight: bold;
+    letter-spacing: 3px; border: 1.5px solid; border-radius: 6px;
+    padding: 4px 16px; font-family: inherit;
+  }
   .status-strip {
     display: flex; gap: 20px; flex-wrap: wrap;
     background: #0f172a; border: 1px solid #1f2937;
@@ -79,7 +87,7 @@
   <div class="sub">Particle Plus Model 7301 &nbsp;&middot;&nbsp; Real-time Particulate &amp; Environmental Dashboard</div>
 </div>
 
-<div style="background:#7f1d1d;border:1px solid #991b1b;color:#fca5a5;border-radius:6px;padding:10px 16px;margin-bottom:16px;font-size:13px;">&#9888; Particle counter OFFLINE &mdash; last connected: 2026-05-29 17:03:49 &mdash; retrying every 30 min. Showing last recorded data.</div>
+<div style="background:#7f1d1d;border:1px solid #991b1b;color:#fca5a5;border-radius:6px;padding:10px 16px;margin-bottom:16px;font-size:13px;">&#9888; Particle counter OFFLINE &mdash; last connected: unknown &mdash; retrying every 30 min. Showing last recorded data.</div>
 
 <div class="controls">
   <div class="ctrl-group">
@@ -96,7 +104,8 @@
       <option value="2880">Last 2 days</option>
     </select>
   </div>
-  <div class="updated">Last pushed: 2026-05-31 21:24:59</div>
+  <div class="iso-wrap"><div class="iso-lbl">Clean Room Class</div><div class="iso-badge" style="color:#6b7280;border-color:#6b7280;">ISO —</div></div>
+  <div class="updated">Last pushed: 2026-05-31 21:56:07</div>
 </div>
 
 <div class="status-strip"><div class="kv"><span class="k">Flow: </span><span class="v">— CFM</span></div><div class="kv"><span class="k">Samples: </span><span class="v">0</span></div><div class="kv"><span class="k">Last sample: </span><span class="v">—</span></div><div class="kv"><span class="k">Laser: </span><span class="v ">—</span></div><div class="kv"><span class="k">Flow: </span><span class="v ">—</span></div><div class="kv"><span class="k">Temp: </span><span class="v ">—</span></div><div class="kv"><span class="k">RH: </span><span class="v ">—</span></div></div>
