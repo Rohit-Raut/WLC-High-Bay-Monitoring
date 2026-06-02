@@ -106,6 +106,16 @@ def decode_string(registers):
         result += chr(low)
     return result.strip()
 
+def encode_string(text, num_regs):
+    """Encode a string into Modbus registers (high byte = first char, zero-terminated)."""
+    regs = []
+    i = 0
+    while len(regs) < num_regs:
+        high = ord(text[i]) if i < len(text) else 0; i += 1
+        low  = ord(text[i]) if i < len(text) else 0; i += 1
+        regs.append((high << 8) | low)
+    return regs
+
 
 # ─── COUNTER CONTROL ──────────────────────────────────────────────────────────
 
@@ -117,6 +127,7 @@ def get_state(client):
         r.registers[0], f'Unknown({r.registers[0]})')
 
 def set_params(client):
+    sync_counter_clock(client)
     log(f"Writing sampling params: "
         f"delay={DELAY_TIME_S}s sample={SAMPLE_TIME_S}s "
         f"hold={HOLD_TIME_S}s cycles={CYCLES}")
@@ -135,6 +146,25 @@ def set_params(client):
         f"sample={decode_u32(rs.registers)}s "
         f"hold={decode_u32(rh.registers)}s "
         f"cycles={rc.registers[0]}")
+
+def sync_counter_clock(client):
+    """Sync the counter's RTC to Pi system time (registers 1016=Date, 1027=Time)."""
+    now = datetime.now()
+    date_str = now.strftime('%Y-%m-%d')   # YYYY-MM-DD (10 chars → 11 regs)
+    time_str = now.strftime('%H:%M:%S')   # hh:mm:ss   ( 8 chars →  9 regs)
+    try:
+        client.write_registers(address=1016, values=encode_string(date_str, 11))
+        time.sleep(0.2)
+        client.write_registers(address=1027, values=encode_string(time_str, 9))
+        time.sleep(0.2)
+        # read back to verify
+        rd = client.read_holding_registers(address=1016, count=11)
+        rt = client.read_holding_registers(address=1027, count=9)
+        rb_date = decode_string(rd.registers) if not rd.isError() else '?'
+        rb_time = decode_string(rt.registers) if not rt.isError() else '?'
+        log(f"Counter clock synced: sent {date_str} {time_str} | readback {rb_date} {rb_time}")
+    except Exception as e:
+        log(f"Counter clock sync failed: {e}", 'WARN')
 
 def start_sampling(client):
     client.write_registers(address=5000, values=[1])
@@ -211,10 +241,11 @@ def read_latched_record(client):
     r = client.read_holding_registers(address=9078, count=1)
     if not r.isError():
         bits = r.registers[0]
-        data['laser_ok'] = bool(bits & 0x0001)
-        data['flow_ok']  = bool(bits & 0x0002)
-        data['temp_ok']  = bool(bits & 0x0004)
-        data['rh_ok']    = bool(bits & 0x0008)
+        data['laser_ok']        = bool(bits & 0x0001)
+        data['flow_ok']         = bool(bits & 0x0002)
+        data['temp_ok']         = bool(bits & 0x0004)
+        data['rh_ok']           = bool(bits & 0x0008)
+        data['timestamp_valid'] = not bool(bits & 0x0080)  # 0x0080 = "Timestamp is invalid"
 
     r = client.read_holding_registers(address=9079, count=1)
     if not r.isError():
@@ -370,7 +401,9 @@ def generate_dashboard_html(csv_path, output_path):
         """Return formatted timestamp string if a real one exists, else None."""
         d = r.get('date', '').strip()
         t = r.get('time', '').strip()
-        if d and t:
+        # Only trust date/time from counter if timestamp_valid is True (or absent for old records)
+        ts_valid = r.get('timestamp_valid', None)
+        if d and t and ts_valid is not False:
             return f"{d} {t}"
         for key in ('sync_time', 'snapshot_time'):
             ts_val = r.get(key, '').strip()
