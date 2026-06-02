@@ -156,44 +156,73 @@ def set_params(client):
 def sync_counter_clock(client):
     """Sync the counter's RTC to Pi system time.
 
-    Protocol (from Particles Plus Modbus Register Map):
-      Reg 1000  Admin Password  (W)    — must be written first to unlock PW registers
-      Reg 1016  Current Date    (R+PW) — YYYY-MM-DD, 11 String regs
-      Reg 1027  Current Time    (R+PW) — hh:mm:ss,   9 String regs
-      Reg 5001  Device Status   (R)    — bit 0x0004 = 'Time of day clock not running'
+    Registers 1016 (Date) and 1027 (Time) are Protected Write (R+PW):
+    admin password must be written to reg 1000 first.
+    Device Status reg 5001 bit 0x0004 = 'Time of day clock not running'.
     """
-    # Step 1: check if the clock hardware is actually running
+    # ── 1. Read Device Status 5001 (log full value for diagnostics) ────────────
     rs = client.read_holding_registers(address=5001, count=1)
-    if not rs.isError() and (rs.registers[0] & 0x0004):
-        log("Counter RTC hardware not running (Device Status 5001 bit 0x0004) "
-            "— cannot set clock via Modbus", 'WARN')
-        return
+    if rs.isError():
+        log("sync_counter_clock: cannot read Device Status (reg 5001)", 'WARN')
+    else:
+        dev_status = rs.registers[0]
+        log(f"sync_counter_clock: Device Status 5001 = 0x{dev_status:04X}  "
+            f"(clock_not_running={bool(dev_status & 0x0004)}, "
+            f"flow_err={bool(dev_status & 0x0001)}, "
+            f"laser_err={bool(dev_status & 0x0002)})")
+        if dev_status & 0x0004:
+            log("Counter RTC hardware not running — cannot set clock via Modbus", 'WARN')
+            return
 
-    now = datetime.now()
-    date_str = now.strftime('%Y-%m-%d')   # YYYY-MM-DD
-    time_str = now.strftime('%H:%M:%S')   # hh:mm:ss
+    # ── 2. Read current state of 1016/1027 BEFORE write ───────────────────────
+    pre_d = client.read_holding_registers(address=1016, count=11)
+    pre_t = client.read_holding_registers(address=1027, count=9)
+    pre_date = decode_string(pre_d.registers) if not pre_d.isError() else '?'
+    pre_time = decode_string(pre_t.registers) if not pre_t.isError() else '?'
+    log(f"sync_counter_clock: clock BEFORE write = '{pre_date}' '{pre_time}'  "
+        f"raw_regs_1016={pre_d.registers[:3] if not pre_d.isError() else '?'}")
+
+    now      = datetime.now()
+    date_str = now.strftime('%Y-%m-%d')
+    time_str = now.strftime('%H:%M:%S')
+
     try:
-        # Step 2: write admin password to register 1000 to unlock Protected Write regs
-        client.write_registers(address=1000, values=encode_string(COUNTER_PASSWORD, 16))
-        time.sleep(0.15)
-        # Step 3: write date and time
+        # ── 3. Authenticate: write admin password to register 1000 ─────────────
+        pw_regs = encode_string(COUNTER_PASSWORD, 16)
+        log(f"sync_counter_clock: writing password to reg 1000  "
+            f"(COUNTER_PASSWORD={repr(COUNTER_PASSWORD)}, "
+            f"first_reg=0x{pw_regs[0]:04X})")
+        client.write_registers(address=1000, values=pw_regs)
+        time.sleep(0.2)
+
+        # ── 4. Write date (reg 1016) and time (reg 1027) ───────────────────────
+        log(f"sync_counter_clock: writing date '{date_str}' → reg 1016, "
+            f"time '{time_str}' → reg 1027")
         client.write_registers(address=1016, values=encode_string(date_str, 11))
         time.sleep(0.2)
         client.write_registers(address=1027, values=encode_string(time_str, 9))
-        time.sleep(0.2)
-        # Step 4: read back to verify the writes actually took effect
+        time.sleep(0.3)
+
+        # ── 5. Read back and compare ───────────────────────────────────────────
         rd = client.read_holding_registers(address=1016, count=11)
         rt = client.read_holding_registers(address=1027, count=9)
         rb_date = decode_string(rd.registers) if not rd.isError() else '?'
         rb_time = decode_string(rt.registers) if not rt.isError() else '?'
+        log(f"sync_counter_clock: clock AFTER write = '{rb_date}' '{rb_time}'")
+
         if rb_date == date_str and rb_time == time_str:
             log(f"Counter clock synced OK: {date_str} {time_str}")
         else:
-            log(f"Counter clock sync FAILED — sent {date_str} {time_str} "
-                f"but readback is '{rb_date}' '{rb_time}'. "
-                f"Check COUNTER_PASSWORD or if clock hardware is running.", 'WARN')
+            log(f"Counter clock sync FAILED — "
+                f"sent '{date_str}' '{time_str}' | "
+                f"readback '{rb_date}' '{rb_time}' | "
+                f"pre-write was '{pre_date}' '{pre_time}'. "
+                f"If readback == pre-write the write was rejected — "
+                f"check COUNTER_PASSWORD (currently {repr(COUNTER_PASSWORD)}). "
+                f"Find the admin password in the device's Settings menu "
+                f"(Communications → Admin Password) and set COUNTER_PASSWORD.", 'WARN')
     except Exception as e:
-        log(f"Counter clock sync error: {e}", 'WARN')
+        log(f"sync_counter_clock: exception: {e}", 'WARN')
 
 def start_sampling(client):
     client.write_registers(address=5000, values=[1])
