@@ -36,13 +36,14 @@ PID_FILE     = f'{BASE_DIR}/particle_plus.pid'
 
 # sampling schedule
 SAMPLE_TIME_S       = 60      # 1 minute sample
-HOLD_TIME_S         = 1800    # 30 min between samples = twice per hour
+HOLD_TIME_S         = 60      # 1 min hold → 2 min total cycle (30/hr)
 DELAY_TIME_S        = 5       # pump stabilization
 CYCLES              = 1       # 1 sample per cycle then hold
 
 # sync/erase
-ERASE_AFTER_SYNC    = False   # set True after verifying data
+ERASE_AFTER_SYNC    = False   # legacy flag — use PURGE_AFTER_DAYS instead
 MIN_RECORDS_TO_SYNC = 1
+PURGE_AFTER_DAYS    = 3       # erase counter records older than this many days
 
 # github — repo root = BASE_DIR so index.html lands at root (GitHub Pages)
 GITHUB_REPO_DIR     = BASE_DIR
@@ -380,6 +381,42 @@ def erase_counter(client):
     remaining = get_record_count(client)
     log(f"Records remaining: {remaining}")
     return remaining == 0
+
+
+def purge_old_records(client):
+    """
+    Erase ALL counter records if the oldest synced record is older than
+    PURGE_AFTER_DAYS days.  Safe because all records are already in the
+    noether CSV before this is called.  After erasure the counter resets
+    its record-number sequence to 0; mode_sync detects this on the next
+    run and re-starts syncing from record 1.
+    """
+    cutoff = datetime.now() - timedelta(days=PURGE_AFTER_DAYS)
+    oldest_dt = None
+    if os.path.exists(OUTPUT_CSV):
+        with open(OUTPUT_CSV) as _f:
+            for _row in csv.DictReader(_f):
+                _d = (_row.get('date') or '').strip()
+                _t = (_row.get('time') or '').strip()
+                _ts = f'{_d} {_t}' if (_d and _t) else (_row.get('sync_time') or '').strip()
+                if not _ts:
+                    continue
+                try:
+                    _dt = datetime.fromisoformat(_ts.replace(' ', 'T'))
+                    if oldest_dt is None or _dt < oldest_dt:
+                        oldest_dt = _dt
+                except Exception:
+                    pass
+    if oldest_dt is None:
+        log("purge_old_records: no timestamped records found, skipping", 'WARN')
+        return
+    if oldest_dt < cutoff:
+        log(f"purge_old_records: oldest record {oldest_dt.strftime('%Y-%m-%d')} "
+            f"is >{PURGE_AFTER_DAYS} days old — erasing counter")
+        erase_counter(client)
+    else:
+        log(f"purge_old_records: oldest record {oldest_dt.strftime('%Y-%m-%d')} "
+            f"is within {PURGE_AFTER_DAYS}-day window, not erasing")
 
 
 # ─── GITHUB PAGES DASHBOARD ───────────────────────────────────────────────────
@@ -1011,7 +1048,7 @@ def generate_dashboard_html(csv_path, output_path):
 <div class="row2">
   <div class="chart-panel">
     <div class="chart-title">Latest Particle Size Distribution &nbsp;(most recent sample)</div>
-    <div id="chart-dist" style="height:280px"></div>
+    <div id="chart-dist" style="height:320px"></div>
   </div>
   <div class="chart-panel">
     <div class="chart-title">Temperature &amp; Humidity Over Time</div>
@@ -1143,8 +1180,8 @@ function filterAndRender() {{
 
   Plotly.react('chart-dist', DIST,
     Object.assign({{}}, DARK, {{
-      showlegend: false, bargap: 0.3,
-      yaxis: Object.assign({{}}, DARK.yaxis, {{ title: 'Counts / m\u00b3', type: 'log', range: [-0.5, null] }}),
+      showlegend: false, bargap: 0.12,
+      yaxis: Object.assign({{}}, DARK.yaxis, {{ title: 'Counts / m\u00b3', type: 'log', range: [-1, null] }}),
       xaxis: Object.assign({{}}, DARK.xaxis, {{ title: 'Particle Size (\u03bcm)' }}),
     }}), {{responsive: true, displaylogo: false}});
 
@@ -1163,11 +1200,12 @@ function filterAndRender() {{
   ], Object.assign({{}}, DARK, {{
     xaxis:  Object.assign({{}}, DARK.xaxis,  {{ title: '' }}),
     yaxis:  Object.assign({{}}, DARK.yaxis,  {{ title: 'Temperature (\u00b0F)' }}),
-    yaxis2: {{ title: 'Humidity (%)',
+    yaxis2: {{ title: {{ text: 'Humidity (%)', standoff: 8 }},
                overlaying: 'y', side: 'right',
                gridcolor: '#1e293b', linecolor: '#334155',
                tickfont: {{ color: '#6b7280', size: 10 }},
                title_font: {{ color: '#6b7280', size: 11 }} }},
+    margin: {{ l: 60, r: 65, t: 30, b: 50 }},
   }}), {{responsive: true, displaylogo: false}});
 
   updateStats(i);
@@ -1336,6 +1374,13 @@ def mode_sync(client=None):
                     except (ValueError, TypeError):
                         pass
 
+        # Detect counter erasure: if total < last_saved the device was cleared
+        # and its record sequence reset to 0.  Restart sync from record 1.
+        if last_saved > 0 and total < last_saved:
+            log(f"Counter was erased/reset (total={total} < last_saved={last_saved}). "
+                f"Syncing all records from 1.")
+            last_saved = 0
+
         if last_saved >= total:
             log(f"Already up to date (saved up to record {last_saved}, counter has {total})")
             return True
@@ -1375,11 +1420,11 @@ def mode_sync(client=None):
         saved = save_to_csv(records, OUTPUT_CSV)
 
         if failed:
-            log(f"WARNING: {len(failed)} failed — NOT erasing", 'WARN')
+            log(f"WARNING: {len(failed)} failed — NOT purging counter", 'WARN')
             return False
 
-        if ERASE_AFTER_SYNC and saved:
-            erase_counter(client)
+        if saved:
+            purge_old_records(client)
 
         return True
 
