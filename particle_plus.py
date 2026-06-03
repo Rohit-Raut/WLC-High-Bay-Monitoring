@@ -752,9 +752,75 @@ def generate_dashboard_html(csv_path, output_path):
     else:
         _iso_color = '#f87171'
         _iso_label = 'ISO&nbsp;9'
+    # ISO 14644-1:2015 limits table (cumulative counts/m³ at each size channel)
+    # Row: (class, 0.3um, 0.5um, 1.0um, 5.0um)  None = not defined for that channel
+    _ISO_ROWS = [
+        (1,  None,           None,           None,          None),
+        (2,  10,             4,              None,          None),
+        (3,  102,            35,             8,             None),
+        (4,  1_020,          352,            83,            None),
+        (5,  10_200,         3_520,          832,           29),
+        (6,  102_000,        35_200,         8_320,         293),
+        (7,  None,           352_000,        83_200,        2_930),
+        (8,  None,           3_520_000,      832_000,       29_300),
+        (9,  None,           35_200_000,     8_320_000,     293_000),
+    ]
+    def _fmt_iso(v):
+        if v is None:
+            return '<span style="color:#374151">&mdash;</span>'
+        if v >= 1_000_000:
+            return f'{v/1_000_000:.1f}M'
+        if v >= 1_000:
+            return f'{v/1_000:.0f}k'
+        return str(v)
+    _iso_table_rows = ''
+    for _cls, *_vals in _ISO_ROWS:
+        _row_color = _iso_color if _cls == _iso_class else ''
+        _bg = 'background:#0f172a;' if _cls == _iso_class else ''
+        _fw = 'font-weight:bold;' if _cls == _iso_class else ''
+        _border = f'border:1px solid {_iso_color};border-radius:3px;' if _cls == _iso_class else ''
+        _cells = ''.join(
+            f'<td style="padding:3px 10px 3px 6px;text-align:right;'
+            f'color:{"#d1d5db" if _row_color else "#6b7280"}">{_fmt_iso(v)}</td>'
+            for v in _vals
+        )
+        _iso_table_rows += (
+            f'<tr style="{_bg}{_fw}{_border}">'
+            f'<td style="padding:3px 8px;color:{_row_color or "#9ca3af"};'
+            f'white-space:nowrap">ISO&nbsp;{_cls}</td>'
+            f'{_cells}</tr>\n'
+        )
+    _iso_dropdown_html = (
+        '<div class="iso-dropdown" id="iso-dropdown">'
+        '<div class="iso-drop-hdr">'
+        'ISO 14644-1:2015 &nbsp;&mdash;&nbsp; Max particle concentration (counts/m&sup3;)'
+        '</div>'
+        '<table style="border-collapse:collapse;width:100%;font-size:11.5px;">'
+        '<thead>'
+        '<tr style="color:#4b7ab8;font-size:9px;letter-spacing:1px;'
+        'text-transform:uppercase;border-bottom:1px solid #1e293b;">'
+        '<th style="padding:4px 8px 5px;text-align:left">Class</th>'
+        '<th style="padding:4px 10px 5px 6px;text-align:right">&ge;0.3&nbsp;&micro;m</th>'
+        '<th style="padding:4px 10px 5px 6px;text-align:right">&ge;0.5&nbsp;&micro;m</th>'
+        '<th style="padding:4px 10px 5px 6px;text-align:right">&ge;1.0&nbsp;&micro;m</th>'
+        '<th style="padding:4px 10px 5px 6px;text-align:right">&ge;5.0&nbsp;&micro;m</th>'
+        '</tr></thead>'
+        f'<tbody>{_iso_table_rows}</tbody>'
+        '</table>'
+        '<div style="font-size:9px;color:#4b5563;margin-top:7px;">'
+        'Current classification shown highlighted &nbsp;&bull;&nbsp; '
+        'Worst-case channel across latest sample'
+        '</div>'
+        '</div>'
+    )
     iso_badge_html = (
-        f'<div class="iso-badge" style="color:{_iso_color};border-color:{_iso_color};margin-left:14px;">'
+        '<div class="iso-badge-wrap">'
+        f'<div class="iso-badge" '
+        f'style="color:{_iso_color};border-color:{_iso_color};cursor:pointer;user-select:none;" '
+        f'onclick="toggleIsoDropdown()" title="ISO 14644-1 class (click for limits table)">'
         f'{_iso_label}</div>'
+        f'{_iso_dropdown_html}'
+        '</div>'
     )
 
     # ── notification center ────────────────────────────────────────────────────
@@ -869,6 +935,23 @@ def generate_dashboard_html(csv_path, output_path):
   .stat-v {{ color: #93c5fd; font-weight: bold; font-size: 12px; }}
   .stat-v.warn {{ color: #fbbf24; }}
   .stat-v.alert {{ color: #f87171; }}
+  /* ISO badge dropdown */
+  .iso-badge-wrap {{
+    position: relative; display: inline-block;
+  }}
+  .iso-dropdown {{
+    display: none; position: absolute; right: 0; top: calc(100% + 6px);
+    z-index: 200;
+    background: #060d1a; border: 1px solid #1e3a5f;
+    border-radius: 6px; padding: 10px 14px 12px; min-width: 380px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  }}
+  .iso-dropdown.open {{ display: block; }}
+  .iso-drop-hdr {{
+    color: #4b7ab8; font-size: 9px; text-transform: uppercase;
+    letter-spacing: 1.5px; padding-bottom: 6px;
+    border-bottom: 1px solid #1e293b; margin-bottom: 6px;
+  }}
 {notif_css}
 </style>
 </head>
@@ -898,8 +981,10 @@ def generate_dashboard_html(csv_path, output_path):
   </div>
   <div class="updated">Last pushed: {updated}</div>
   <div style="flex:1"></div>
-  {notif_badge_html}
-  {iso_badge_html}
+  <div style="display:flex;align-items:flex-end;gap:10px;">
+    {notif_badge_html}
+    {iso_badge_html}
+  </div>
 </div>
 
 <div class="status-strip">{status_strip_html}</div>
@@ -1091,6 +1176,17 @@ function filterAndRender() {{
 filterAndRender();
 
 {notif_js}
+function toggleIsoDropdown() {{
+  var d = document.getElementById('iso-dropdown');
+  if (d) d.classList.toggle('open');
+}}
+document.addEventListener('click', function(e) {{
+  var wrap = document.querySelector('.iso-badge-wrap');
+  if (wrap && !wrap.contains(e.target)) {{
+    var d = document.getElementById('iso-dropdown');
+    if (d) d.classList.remove('open');
+  }}
+}});
 </script>
 </body>
 </html>"""
