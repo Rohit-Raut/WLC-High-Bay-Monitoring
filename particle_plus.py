@@ -704,37 +704,44 @@ def generate_dashboard_html(csv_path, output_path):
 
     updated = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    # ── ISO 14644-1 classification ─────────────────────────────────────────────
-    # Cumulative counts/m³ thresholds per ISO class for each particle size (µm)
-    _ISO_TABLE = {
-        0.3: [(3,102),(4,1020),(5,10200),(6,102000)],
-        0.5: [(3,35),(4,352),(5,3520),(6,35200),(7,352000),(8,3520000),(9,35200000)],
-        1.0: [(3,8),(4,83),(5,832),(6,8320),(7,83200),(8,832000),(9,8320000)],
-        5.0: [(5,29),(6,293),(7,2930),(8,29300),(9,293000)],
+    # ── ISO 14644-1:2015 classification ───────────────────────────────────────
+    # Keyed by (class, size_um) → max cumulative particles/m³.
+    # Only sizes with defined limits at each class are included.
+    # ISO 7-9 have no ≥0.3 µm limit, so exceeding ISO 6 at 0.3 µm does NOT
+    # make the room "ISO 9" — it only disqualifies ISO 1-6 at that size.
+    _ISO_FULL = {
+        (3, 0.3): 102,       (3, 0.5): 35,        (3, 1.0): 8,
+        (4, 0.3): 1020,      (4, 0.5): 352,        (4, 1.0): 83,
+        (5, 0.3): 10200,     (5, 0.5): 3520,       (5, 1.0): 832,     (5, 5.0): 29,
+        (6, 0.3): 102000,    (6, 0.5): 35200,      (6, 1.0): 8320,    (6, 5.0): 293,
+        (7,       0.5): 352000,    (7, 1.0): 83200,    (7, 5.0): 2930,
+        (8,       0.5): 3520000,   (8, 1.0): 832000,   (8, 5.0): 29300,
+        (9,       0.5): 35200000,  (9, 1.0): 8320000,  (9, 5.0): 293000,
     }
     _latest_rec = next((r for r in reversed(recent)), None)
     _iso_class  = None
     if _latest_rec:
-        _worst = 0
+        # Use cumulative (sum) counts — the standard specifies ≥ particle size
+        _measured = {}
         for _ci in range(1, 7):
             try:
                 _sz = round(float(ch_sizes.get(_ci, '')), 1)
             except (ValueError, TypeError):
                 continue
-            if _sz not in _ISO_TABLE:
+            _conc = sf(_latest_rec.get(f'ch{_ci}_sum_m3'))
+            if _conc is not None:
+                _measured[_sz] = _conc
+
+        # Find the most stringent (lowest-numbered) class where every channel
+        # with a defined limit at that class meets its limit.
+        for _cls in range(1, 10):
+            _applicable = [(sz, lim) for (c, sz), lim in _ISO_FULL.items()
+                           if c == _cls and sz in _measured]
+            if not _applicable:
                 continue
-            _conc = sf(_latest_rec.get(f'ch{_ci}_diff_m3'))
-            if _conc is None:
-                continue
-            _ch_cls = 10  # beyond ISO 9 until proven otherwise
-            for _cls, _lim in _ISO_TABLE[_sz]:
-                if _conc <= _lim:
-                    _ch_cls = _cls
-                    break
-            if _ch_cls > _worst:
-                _worst = _ch_cls
-        if _worst > 0:
-            _iso_class = _worst
+            if all(_measured[sz] <= lim for sz, lim in _applicable):
+                _iso_class = _cls
+                break
 
     if _iso_class is None:
         _iso_color = '#6b7280'
