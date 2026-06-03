@@ -1219,7 +1219,7 @@ function filterAndRender() {{
   Plotly.react('chart-dist', DIST,
     Object.assign({{}}, DARK, {{
       showlegend: false, bargap: 0.3,
-      yaxis: Object.assign({{}}, DARK.yaxis, {{ title: 'Counts / m\u00b3', type: 'log', range: [-0.5, 3] }}),
+      yaxis: Object.assign({{}}, DARK.yaxis, {{ title: 'Counts / m\u00b3', type: 'log', range: [-0.5, 3.31] }}),
       xaxis: Object.assign({{}}, DARK.xaxis, {{ title: 'Particle Size (\u03bcm)' }}),
     }}), {{responsive: true, displaylogo: false}});
 
@@ -1238,7 +1238,7 @@ function filterAndRender() {{
   ], Object.assign({{}}, DARK, {{
     xaxis:  Object.assign({{}}, DARK.xaxis,  {{ title: '' }}),
     yaxis:  Object.assign({{}}, DARK.yaxis,  {{ title: 'Temperature (\u00b0F)' }}),
-    yaxis2: {{ title: 'Humidity (%)',
+    yaxis2: {{ title: {{ text: 'Humidity (%)', standoff: 20 }},
                overlaying: 'y', side: 'right',
                gridcolor: '#1e293b', linecolor: '#334155',
                tickfont: {{ color: '#6b7280', size: 10 }},
