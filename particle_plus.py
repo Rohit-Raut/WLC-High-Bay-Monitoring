@@ -800,66 +800,109 @@ def generate_dashboard_html(csv_path, output_path):
 
     _notif_rows = []
 
-    # 1. Last sample time
+    # 1. Last sample time — warn if stale >1 hr, alert if very stale >6 hr
     _last_ts_str = get_real_ts(_latest_rec) if _latest_rec else None
     if _last_ts_str:
         try:
             _last_dt   = datetime.fromisoformat(_last_ts_str.replace(' ', 'T'))
             _ago_s     = int((datetime.now() - _last_dt).total_seconds())
-            _ago_label = (f'{_ago_s // 60}\u00a0min ago' if _ago_s < 3600
-                          else f'{_ago_s // 3600}\u00a0hr ago' if _ago_s < 86400
-                          else f'{_ago_s // 86400}\u00a0day(s) ago')
-            _notif_rows.append(('info',
-                f'\u25cf\u00a0Last sample: {_last_ts_str}\u00a0({_ago_label})'))
+            _ago_label = (f'{_ago_s // 60} min ago' if _ago_s < 3600
+                          else f'{_ago_s // 3600} hr {(_ago_s % 3600) // 60} min ago' if _ago_s < 86400
+                          else f'{_ago_s // 86400} day(s) ago')
+            _stale_lvl = 'alert' if _ago_s > 21600 else 'warn' if _ago_s > 3600 else 'info'
+            _notif_rows.append((_stale_lvl,
+                f'● Last sample: {_last_ts_str} ({_ago_label})'))
         except Exception:
-            _notif_rows.append(('info', f'\u25cf\u00a0Last sample: {_last_ts_str}'))
+            _notif_rows.append(('info', f'● Last sample: {_last_ts_str}'))
     else:
-        _notif_rows.append(('warn', '\u25cf\u00a0Last sample: unknown'))
+        _notif_rows.append(('alert', '▲ Last sample: unknown — no data received'))
 
-    # 2. Relative humidity
+    # 2. ISO classification — red if ISO >= 8, yellow if ISO 7, green if <= 6
+    if _iso_class is not None:
+        if _iso_class <= 6:
+            _notif_rows.append(('ok',
+                f'● ISO class: ISO {_iso_class} — within target'))
+        elif _iso_class == 7:
+            _notif_rows.append(('warn',
+                f'▲ ISO class: ISO {_iso_class} — marginal (target: ISO 6)'))
+        else:
+            _notif_rows.append(('alert',
+                f'▲ ISO class: ISO {_iso_class} — EXCEEDS ISO 7 limit'))
+    else:
+        _notif_rows.append(('alert',
+            '▲ ISO class: unclassifiable — particle count off-scale'))
+
+    # 3. >=0.5 um concentration vs ISO 6 limit (35,200 /m3)
+    _p05_now = sf(_latest_rec.get('ch2_diff_m3')) if _latest_rec else None
+    if _p05_now is not None:
+        if _p05_now > 352000:
+            _notif_rows.append(('alert',
+                f'▲ ≥0.5µm {_p05_now:,.0f}/m³ — exceeds ISO 7 (352 000)'))
+        elif _p05_now > 35200:
+            _notif_rows.append(('warn',
+                f'▲ ≥0.5µm {_p05_now:,.0f}/m³ — exceeds ISO 6 (35 200)'))
+        else:
+            _notif_rows.append(('ok',
+                f'● ≥0.5µm {_p05_now:,.0f}/m³ — within ISO 6'))
+    else:
+        _notif_rows.append(('mute', '○ ≥0.5µm: no data'))
+
+    # 4. >=0.3 um concentration vs ISO 6 limit (102,000 /m3)
+    _p_now = sf(_latest_rec.get('ch1_diff_m3')) if _latest_rec else None
+    if _p_now is not None:
+        if _p_now > _N_P_HIGH:
+            _notif_rows.append(('alert',
+                f'▲ ≥0.3µm {_p_now:,.0f}/m³ — above contamination threshold'))
+        elif _p_now > 102000:
+            _notif_rows.append(('warn',
+                f'▲ ≥0.3µm {_p_now:,.0f}/m³ — exceeds ISO 6 (102 000)'))
+        else:
+            _notif_rows.append(('ok',
+                f'● ≥0.3µm {_p_now:,.0f}/m³ — within ISO 6'))
+    else:
+        _notif_rows.append(('mute', '○ ≥0.3µm: no data'))
+
+    # 5. Sensor health: laser and flow
+    for _sn, _sok in [('Laser', laser_ok), ('Flow sensor', flow_ok)]:
+        if _sok is True:
+            _notif_rows.append(('ok',    f'● {_sn}: OK'))
+        elif _sok is False:
+            _notif_rows.append(('alert', f'▲ {_sn}: FAULT — check instrument'))
+        else:
+            _notif_rows.append(('mute',  f'○ {_sn}: no data'))
+
+    # 6. Relative humidity
     _rh_now = sf(_latest_rec.get('RH_pct')) if _latest_rec else None
     if _rh_now is not None:
         if _rh_now < _N_RH_LOW:
             _notif_rows.append(('alert',
-                f'\u25b2\u00a0RH\u00a0{_rh_now:.0f}% \u2014 below {_N_RH_LOW:.0f}% threshold (static risk)'))
+                f'▲ RH {_rh_now:.0f}% — below {_N_RH_LOW:.0f}% (static discharge risk)'))
         elif _rh_now > _N_RH_HIGH:
             _notif_rows.append(('alert',
-                f'\u25b2\u00a0RH\u00a0{_rh_now:.0f}% \u2014 above {_N_RH_HIGH:.0f}% threshold (condensation risk)'))
+                f'▲ RH {_rh_now:.0f}% — above {_N_RH_HIGH:.0f}% (condensation risk)'))
         else:
             _notif_rows.append(('ok',
-                f'\u25cf\u00a0RH\u00a0{_rh_now:.0f}% \u2014 nominal'))
+                f'● RH {_rh_now:.0f}% — nominal'))
     else:
-        _notif_rows.append(('mute', '\u25cb\u00a0RH: no sensor data'))
+        _notif_rows.append(('mute', '○ RH: no sensor data'))
 
-    # 3. Temperature
+    # 7. Temperature
     _tc_now = sf(_latest_rec.get('temp_C')) if _latest_rec else None
     if _tc_now is not None and _tc_now > 0:
         _tf_now = round(_tc_now * 9/5 + 32, 1)
         if _tf_now < _N_TF_LOW:
             _notif_rows.append(('alert',
-                f'\u25b2\u00a0Temp\u00a0{_tc_now:.1f}\u00b0C / {_tf_now:.0f}\u00b0F \u2014 below {_N_TF_LOW:.0f}\u00b0F threshold'))
+                f'▲ Temp {_tc_now:.1f}°C / {_tf_now:.0f}°F — below {_N_TF_LOW:.0f}°F threshold'))
         elif _tf_now > _N_TF_HIGH:
             _notif_rows.append(('alert',
-                f'\u25b2\u00a0Temp\u00a0{_tc_now:.1f}\u00b0C / {_tf_now:.0f}\u00b0F \u2014 above {_N_TF_HIGH:.0f}\u00b0F threshold'))
+                f'▲ Temp {_tc_now:.1f}°C / {_tf_now:.0f}°F — above {_N_TF_HIGH:.0f}°F threshold'))
         else:
             _notif_rows.append(('ok',
-                f'\u25cf\u00a0Temp\u00a0{_tc_now:.1f}\u00b0C / {_tf_now:.0f}\u00b0F \u2014 nominal'))
+                f'● Temp {_tc_now:.1f}°C / {_tf_now:.0f}°F — nominal'))
     else:
-        _notif_rows.append(('mute', '\u25cb\u00a0Temp: no sensor data'))
+        _notif_rows.append(('mute', '○ Temp: no sensor data'))
 
-    # 4. Particle concentration at 0.3 µm
-    _p_now = sf(_latest_rec.get('ch1_diff_m3')) if _latest_rec else None
-    if _p_now is not None:
-        if _p_now > _N_P_HIGH:
-            _notif_rows.append(('alert',
-                f'\u25b2\u00a00.3\u00b5m\u00a0{_p_now:,.0f}\u00a0/m\u00b3 \u2014 above contamination threshold'))
-        else:
-            _notif_rows.append(('ok',
-                f'\u25cf\u00a00.3\u00b5m\u00a0{_p_now:,.0f}\u00a0/m\u00b3 \u2014 within limit'))
-    else:
-        _notif_rows.append(('mute', '\u25cb\u00a00.3\u00b5m: no data'))
-
-    # 5. Recent emails from alert_state.json (sent within last 24 hr)
+    # 8. Recent emails from alert_state.json (sent within last 24 hr)
     _alert_labels = {
         'rh_low':          'Low humidity',
         'rh_high':         'High humidity',
@@ -875,13 +918,13 @@ def generate_dashboard_html(csv_path, output_path):
             _adt = datetime.fromisoformat(_ats)
             if _adt >= _email_cutoff:
                 _notif_rows.append(('email',
-                    f'\u2709\u00a0Email sent: {_alert_labels.get(_ak, _ak)} '
-                    f'at\u00a0{_adt.strftime("%H:%M")}'))
+                    f'✉ Email sent: {_alert_labels.get(_ak, _ak)} '
+                    f'at {_adt.strftime("%H:%M")}'))
                 _email_sent = True
         except Exception:
             pass
     if not _email_sent:
-        _notif_rows.append(('mute', '\u25cb\u00a0No alerts emailed in last 24\u00a0hr'))
+        _notif_rows.append(('mute', '○ No alerts emailed in last 24 hr'))
 
     # Build HTML rows
     _css_map = {'ok': 'ni-ok', 'warn': 'ni-warn', 'alert': 'ni-alert',
@@ -1015,7 +1058,8 @@ def generate_dashboard_html(csv_path, output_path):
   .notif-btn:hover {{ border-color: #38bdf8; color: #93c5fd; }}
   .notif-drop {{
     display: none; position: absolute; right: 0; top: calc(100% + 6px);
-    min-width: 320px; max-width: 420px;
+    min-width: 340px; max-width: 440px;
+    max-height: 340px; overflow-y: auto;
     background: #060d1a; border: 1px solid #1e3a5f; border-radius: 6px;
     padding: 10px 16px 14px; z-index: 100;
     flex-direction: column; gap: 5px;
