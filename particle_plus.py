@@ -398,6 +398,17 @@ def generate_dashboard_html(csv_path, output_path):
     """
     import json
 
+    # ── load chart interaction JS from features/dashboard/ ────────────────────
+    # Chart rendering logic lives in a separate file so it can be edited without
+    # touching this function.  The file is embedded verbatim after the data block.
+    _chart_js_path = os.path.join(BASE_DIR, 'features', 'dashboard', 'chart_interactions.js')
+    try:
+        with open(_chart_js_path) as _jf:
+            _chart_js = _jf.read()
+    except OSError as _e:
+        log(f"WARNING: could not read {_chart_js_path}: {_e} — dashboard JS may be incomplete", 'WARN')
+        _chart_js = '// chart_interactions.js not found'
+
     # ── read CSV ──────────────────────────────────────────────────────────────
     rows = []
     if os.path.exists(csv_path):
@@ -1159,162 +1170,11 @@ const LIVE_TS  = {live_ts_js};
 const TEMP_F   = {temp_f_js};
 const RH_VALS  = {rh_js};
 const ISO_LINES = {iso_lines_js};
-
-const DARK = {{
-  paper_bgcolor: '#0f172a',
-  plot_bgcolor:  '#0f172a',
-  font:      {{ color: '#9ca3af', family: 'Courier New, monospace', size: 11 }},
-  margin:    {{ l: 60, r: 20, t: 30, b: 50 }},
-  hovermode: 'x unified',
-  hoverlabel: {{ bgcolor: '#1e293b', bordercolor: '#334155', font: {{ size: 11 }} }},
-  legend: {{ bgcolor: 'rgba(0,0,0,0)', bordercolor: '#334155', borderwidth: 1,
-             font: {{ size: 11 }}, orientation: 'h', yanchor: 'bottom', y: 1.02, x: 0 }},
-  xaxis: {{ gridcolor: '#1e293b', linecolor: '#334155', zerolinecolor: '#1e293b',
-           tickfont: {{ color: '#6b7280', size: 10 }},
-           title_font: {{ color: '#6b7280', size: 11 }} }},
-  yaxis: {{ gridcolor: '#1e293b', linecolor: '#334155', zerolinecolor: '#1e293b',
-           tickfont: {{ color: '#6b7280', size: 10 }},
-           title_font: {{ color: '#6b7280', size: 11 }} }},
-}};
-
-function sliceIdx(mins) {{
-  if (!mins || TS.length === 0) return 0;
-  const cut = new Date(new Date(TS[TS.length - 1]) - mins * 60000);
-  const i = TS.findIndex(t => new Date(t) >= cut);
-  return i < 0 ? TS.length - 1 : i;
-}}
-
-function sliceTraces(traces, i) {{
-  return traces.map(tr => Object.assign({{}}, tr, {{
-    x: tr.x.slice(i), y: tr.y.slice(i)
-  }}));
-}}
-
-// Returns vrect shapes for gaps > GAP_THRESH_MS in a timestamp array.
-// These are rendered as subtle grey bands indicating the counter was offline.
-function gapShapes(ts) {{
-  const GAP_THRESH_MS = 90 * 60 * 1000;   // 90 minutes
-  const shapes = [];
-  for (let k = 1; k < ts.length; k++) {{
-    if (new Date(ts[k]) - new Date(ts[k-1]) > GAP_THRESH_MS) {{
-      shapes.push({{
-        type: 'rect', xref: 'x', yref: 'paper',
-        x0: ts[k-1], x1: ts[k], y0: 0, y1: 1,
-        fillcolor: 'rgba(100,116,139,0.10)', line: {{ width: 0 }}, layer: 'below'
-      }});
-    }}
-  }}
-  return shapes;
-}}
-
-// ISO 14644-1 reference lines for the 0.5 µm channel (horizontal dashed lines).
-function isoShapes() {{
-  return ISO_LINES.map(l => ({{
-    type: 'line', xref: 'paper', x0: 0, x1: 1,
-    yref: 'y', y0: l.y, y1: l.y,
-    line: {{ color: l.color, width: l.width, dash: l.dash }}
-  }}));
-}}
-function isoAnnotations() {{
-  return ISO_LINES.map(l => ({{
-    xref: 'paper', x: 1.02, yref: 'y', y: l.y,
-    text: l.bold ? '<b>' + l.label + '</b>' : l.label,
-    showarrow: false, xanchor: 'left',
-    font: {{ color: l.color, size: l.bold ? 12 : 10, family: 'Courier New, monospace' }}
-  }}));
-}}
-
-function updateStats(i) {{
-  const ts   = TS.slice(i);
-  const ch1  = COUNTS[0].y.slice(i).filter(v => v !== null && v !== undefined);
-  const ch2  = COUNTS[1].y.slice(i).filter(v => v !== null && v !== undefined);
-  const n    = ts.length;
-  const fmt  = v => (v !== null && !isNaN(v)) ? Math.round(v).toLocaleString() + '\u00a0/m\u00b3' : '--';
-  const mean1 = ch1.length ? ch1.reduce((a,b)=>a+b,0)/ch1.length : null;
-  const peak1 = ch1.length ? Math.max(...ch1) : null;
-  const exc7  = ch2.filter(v => v > 352000).length;
-  const exc7s = ch2.length ? exc7 + '\u00a0/\u00a0' + ch2.length + '\u00a0(' + (exc7/ch2.length*100).toFixed(0) + '%)' : '--';
-  const gaps  = gapShapes(ts).length;
-
-  document.getElementById('stat-n').textContent     = n;
-  document.getElementById('stat-mean1').textContent = fmt(mean1);
-  document.getElementById('stat-peak1').textContent = fmt(peak1);
-
-  const excEl = document.getElementById('stat-exc7');
-  excEl.textContent  = exc7s;
-  excEl.className    = 'stat-v' + (exc7 > 0 ? ' warn' : '');
-
-  const gapEl = document.getElementById('stat-gaps');
-  gapEl.textContent = gaps > 0 ? gaps + (gaps === 1 ? ' gap' : ' gaps') : 'none';
-  gapEl.className   = 'stat-v' + (gaps > 0 ? ' warn' : '');
-}}
-
-function filterAndRender() {{
-  const mins = parseInt(document.getElementById('sel-range').value);
-  const i    = sliceIdx(mins);
-  const ts   = TS.slice(i);
-  const gaps = gapShapes(ts);
-
-  Plotly.react('chart-counts', sliceTraces(COUNTS, i),
-    Object.assign({{}}, DARK, {{
-      yaxis:       Object.assign({{}}, DARK.yaxis, {{ title: 'Counts / m\u00b3', type: 'log' }}),
-      xaxis:       Object.assign({{}}, DARK.xaxis, {{ title: '' }}),
-      margin:      {{ l: 60, r: 72, t: 30, b: 50 }},
-      shapes:      [...gaps, ...isoShapes()],
-      annotations: isoAnnotations(),
-    }}), {{responsive: true, displaylogo: false}});
-
-  Plotly.react('chart-pm', sliceTraces(PM, i),
-    Object.assign({{}}, DARK, {{
-      yaxis:  Object.assign({{}}, DARK.yaxis, {{ title: '\u03bcg / m\u00b3' }}),
-      xaxis:  Object.assign({{}}, DARK.xaxis, {{ title: '' }}),
-      shapes: gaps,
-    }}), {{responsive: true, displaylogo: false}});
-
-  // Dynamic log-scale range: expand to the actual max count so tall bars are never clipped
-  const _distMax = (DIST[0] && DIST[0].y.length) ? Math.max(...DIST[0].y) : 100;
-  const _distLogMax = Math.log10(Math.max(_distMax, 1)) + 0.3;
-  Plotly.react('chart-dist', DIST,
-    Object.assign({{}}, DARK, {{
-      showlegend: false, bargap: 0.3,
-      yaxis: Object.assign({{}}, DARK.yaxis, {{ title: 'Counts / m\u00b3', type: 'log', range: [-0.5, _distLogMax] }}),
-      xaxis: Object.assign({{}}, DARK.xaxis, {{ title: 'Particle Size (\u03bcm)' }}),
-    }}), {{responsive: true, displaylogo: false}});
-
-  const livei = (LIVE_TS.length === 0 || !mins) ? 0 : (() => {{
-    const cut = new Date(new Date(LIVE_TS[LIVE_TS.length - 1]) - mins * 60000);
-    const j = LIVE_TS.findIndex(t => new Date(t) >= cut);
-    return j < 0 ? LIVE_TS.length - 1 : j;
-  }})();
-  Plotly.react('chart-env', [
-    {{ x: LIVE_TS.slice(livei), y: TEMP_F.slice(livei),  name: 'Temperature (\u00b0F)',
-       type: 'scatter', mode: 'lines',
-       line: {{ color: '#ff6b6b', width: 2 }}, yaxis: 'y' }},
-    {{ x: LIVE_TS.slice(livei), y: RH_VALS.slice(livei), name: 'Humidity (%)',
-       type: 'scatter', mode: 'lines',
-       line: {{ color: '#4ecdc4', width: 2 }}, yaxis: 'y2' }},
-  ], Object.assign({{}}, DARK, {{
-    margin: {{ l: 60, r: 70, t: 30, b: 50 }},
-    xaxis:  Object.assign({{}}, DARK.xaxis,  {{ title: '' }}),
-    yaxis:  Object.assign({{}}, DARK.yaxis,  {{ title: 'Temperature (\u00b0F)' }}),
-    yaxis2: {{ title: {{ text: 'Humidity (%)', standoff: 15 }},
-               overlaying: 'y', side: 'right',
-               gridcolor: '#1e293b', linecolor: '#334155',
-               tickfont: {{ color: '#6b7280', size: 10 }},
-               title_font: {{ color: '#6b7280', size: 11 }} }},
-  }}), {{responsive: true, displaylogo: false}});
-
-  updateStats(i);
-}}
-
-filterAndRender();
-
-document.addEventListener('click', function(e) {{
-  var drop = document.getElementById('notif-drop');
-  if (drop && drop.classList.contains('open') && !drop.parentElement.contains(e.target)) {{
-    drop.classList.remove('open');
-  }}
-}});
+</script>
+<script>
+/* chart_interactions.js — embedded by particle_plus.py::generate_dashboard_html() */
+{_chart_js}
+/**/
 </script>
 </body>
 </html>"""

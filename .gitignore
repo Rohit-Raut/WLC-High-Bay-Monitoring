@@ -11,7 +11,8 @@ data/measurement_archive.csv
 data/counter_state.json
 
 # Old dashboard subdirectory (now generated at repo root instead)
-dashboard/
+# Leading / anchors to repo root — does NOT match features/dashboard/
+/dashboard/
 
 # Python
 __pycache__/
