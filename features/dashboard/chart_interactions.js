@@ -266,6 +266,15 @@ function filterAndRender() {
   }), PLOTLY_CFG);
 
   updateStats(i);
+
+  // Update prevRange values at render/range change
+  ['chart-counts', 'chart-pm', 'chart-env'].forEach(function (divId) {
+    const tsArray = (divId === 'chart-env') ? LIVE_TS : TS;
+    if (tsArray.length) {
+      const idx = sliceIdxForArray(tsArray, mins);
+      _updatePrevRange(divId, _parseDate(tsArray[idx]).getTime(), _parseDate(tsArray[tsArray.length - 1]).getTime());
+    }
+  });
 }
 
 // ── Zoom behaviour: expansion, left/right hard stops, zoom-in limit ───────────
@@ -309,56 +318,79 @@ function _toLocalStr(date) {
 }
 
 // ── Shared constants / state ──────────────────────────────────────────────────
-const MIN_SPAN_MS = 30 * 60 * 1000;   // 30 min hard floor for zoom-in
+const MIN_SPAN_MS = 60 * 60 * 1000;   // 1 hour hard floor for zoom-in
 
 let _zooming = false;   // re-entrancy guard — blocks recursive plotly_relayout
 
-// ── Zoom-in clamp ─────────────────────────────────────────────────────────────
-// If the visible span drops below the minimum span, snap back to minimum span centred on
-// the current midpoint.  Called synchronously — Plotly.relayout fires another
-// plotly_relayout event but _zooming blocks it before it can re-enter here.
-function _clampSpan(divId, x0str, x1str) {
-  if (_zooming) return;
-  const x0ms = _parseDate(x0str).getTime();
-  const x1ms = _parseDate(x1str).getTime();
-  if (isNaN(x0ms) || isNaN(x1ms) || x1ms - x0ms >= MIN_SPAN_MS) return;
-  _zooming = true;
-  const mid = (x0ms + x1ms) / 2;
-  Plotly.relayout(divId, {
-    'xaxis.range[0]': _toLocalStr(new Date(mid - MIN_SPAN_MS / 2)),
-    'xaxis.range[1]': _toLocalStr(new Date(mid + MIN_SPAN_MS / 2)),
-  });
-  _zooming = false;
+// Track visible ranges of the charts to detect zoom-in and anchor appropriately.
+const _prevRange = { 'chart-counts': null, 'chart-pm': null, 'chart-env': null };
+
+function _updatePrevRange(divId, x0, x1) {
+  _prevRange[divId] = { x0: x0, x1: x1 };
 }
 
-// ── Left-edge handler (zoom-out expansion OR 7-day hard stop) ─────────────────
-// x0str is the current left edge of the X axis from the relayout event.
-function _handleLeftEdge(divId, x0str) {
-  if (_zooming) return;
-  const sel     = document.getElementById('sel-range');
-  const mins    = parseInt(sel.value);
-  const x0ms    = _parseDate(x0str).getTime();
-  if (isNaN(x0ms)) return;
-
+// Enforce minimum zoom-in floor, max allowed end date, and zoom-out bounds
+function _enforceZoomConstraints(divId, targetX0, targetX1, x0orig, x1orig) {
   const tsArray = (divId === 'chart-env') ? LIVE_TS : TS;
   if (!tsArray.length) return;
-  const dataEndMs   = _parseDate(tsArray[tsArray.length - 1]).getTime();
-  const dataStartMs = dataEndMs - mins * 60 * 1000;
-  if (x0ms >= dataStartMs) return;   // within window — nothing to do
 
-  if (sel.selectedIndex < sel.options.length - 1) {
-    // Below max: step the dropdown up and reload
+  const dataEndMs = _parseDate(tsArray[tsArray.length - 1]).getTime();
+  let x0 = targetX0;
+  let x1 = targetX1;
+  let span = x1 - x0;
+
+  // 1. Zoom-in clamp (floor)
+  if (span < MIN_SPAN_MS) {
+    span = MIN_SPAN_MS;
+    const mid = (x0 + x1) / 2;
+    x0 = mid - MIN_SPAN_MS / 2;
+    x1 = mid + MIN_SPAN_MS / 2;
+  }
+
+  // 2. Right hard stop (never zoom past latest data)
+  if (x1 > dataEndMs) {
+    x0 -= (x1 - dataEndMs);
+    x1 = dataEndMs;
+  }
+
+  // 3. Zoom-out expansion / left hard stop
+  const sel = document.getElementById('sel-range');
+  const mins = parseInt(sel.value);
+  const dataStartMs = dataEndMs - mins * 60 * 1000;
+
+  if (x0 < dataStartMs) {
+    if (sel.selectedIndex < sel.options.length - 1) {
+      // Below max: step the dropdown up and reload
+      _zooming = true;
+      sel.selectedIndex++;
+      filterAndRender();
+      _zooming = false;
+      return;
+    } else {
+      // At max (7-day): snap back to left boundary
+      const snapTo = getLeftBound(divId, mins);
+      if (snapTo) {
+        const lbMs = _parseDate(snapTo).getTime();
+        x0 = lbMs;
+        x1 = Math.min(x0 + span, dataEndMs);
+      }
+    }
+  }
+
+  // If computed range differs from the original layout range, perform Plotly relayout.
+  if (Math.abs(x0 - x0orig) > 1000 || Math.abs(x1 - x1orig) > 1000) {
     _zooming = true;
-    sel.selectedIndex++;
-    filterAndRender();
-    _zooming = false;
+    Plotly.relayout(divId, {
+      'xaxis.range[0]': _toLocalStr(new Date(x0)),
+      'xaxis.range[1]': _toLocalStr(new Date(x1))
+    }).then(function () {
+      _zooming = false;
+      _updatePrevRange(divId, x0, x1);
+    }).catch(function () {
+      _zooming = false;
+    });
   } else {
-    // At max (7-day): snap x0 back to the first timestamp in the current window.
-    const snapTo = getLeftBound(divId, mins);
-    if (!snapTo) return;
-    _zooming = true;
-    Plotly.relayout(divId, { 'xaxis.range[0]': snapTo });
-    _zooming = false;
+    _updatePrevRange(divId, x0, x1);
   }
 }
 
@@ -366,9 +398,9 @@ function _handleLeftEdge(divId, x0str) {
 window._attachZoomListeners = function () {
   ['chart-counts', 'chart-pm', 'chart-env'].forEach(function (divId) {
     document.getElementById(divId).on('plotly_relayout', function (ev) {
+      if (_zooming) return;
+
       // Handle both Plotly event formats for X range:
-      //   { 'xaxis.range[0]': v, 'xaxis.range[1]': v }  (interactive zoom/pan)
-      //   { 'xaxis.range': [v, v] }                      (some programmatic calls)
       let x0 = ev['xaxis.range[0]'];
       let x1 = ev['xaxis.range[1]'];
       if (x0 === undefined && Array.isArray(ev['xaxis.range'])) {
@@ -377,10 +409,35 @@ window._attachZoomListeners = function () {
       }
       if (x0 === undefined) return;
 
-      // Zoom-in check first (sets _zooming before the expand check)
-      if (x1 !== undefined) _clampSpan(divId, x0, x1);
-      // Left-edge check: expand or hard-stop
-      _handleLeftEdge(divId, x0);
+      const x0ms = _parseDate(x0).getTime();
+      const x1ms = _parseDate(x1).getTime();
+      if (isNaN(x0ms) || isNaN(x1ms)) return;
+
+      const newSpan = x1ms - x0ms;
+      const prev = _prevRange[divId];
+      let isZoomIn = false;
+      if (prev) {
+        const prevSpan = prev.x1 - prev.x0;
+        if (newSpan < prevSpan - 1000) {
+          isZoomIn = true;
+        }
+      }
+
+      let targetX0 = x0ms;
+      let targetX1 = x1ms;
+
+      const tsArray = (divId === 'chart-env') ? LIVE_TS : TS;
+      if (tsArray.length && isZoomIn) {
+        const dataEndMs = _parseDate(tsArray[tsArray.length - 1]).getTime();
+        // If the previous right edge was anchored near the most recent data (within 5 mins),
+        // lock the zoom-in focus to the right-most part (most recent data).
+        if (prev && (dataEndMs - prev.x1 < 5 * 60 * 1000)) {
+          targetX1 = dataEndMs;
+          targetX0 = dataEndMs - newSpan;
+        }
+      }
+
+      _enforceZoomConstraints(divId, targetX0, targetX1, x0ms, x1ms);
     });
   });
 };
