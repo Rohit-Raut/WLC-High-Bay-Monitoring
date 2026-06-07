@@ -174,11 +174,17 @@ function filterAndRender() {
   const ts   = TS.slice(i);
   const gaps = gapShapes(ts);
 
-  // When the dropdown is at its maximum option (Last 7 days), set xaxis.minallowed
-  // to the first data point so Plotly physically prevents zooming/panning further
-  // left.  Below max, leave minallowed unset so the expansion listener can fire.
-  const isAtMax  = sel.selectedIndex >= sel.options.length - 1;
-  const xBounds  = (isAtMax && ts.length > 0) ? { minallowed: ts[0] } : {};
+  // X axis hard bounds for particle charts:
+  //   maxallowed = latest data point — always set so zooming/panning cannot
+  //                drift into the future (prevents the chart reaching 2050+).
+  //   minallowed = first data point in the current slice — only set at the
+  //                maximum dropdown option (7 days) to stop left-expansion;
+  //                left unset below max so the zoom-out expansion listener fires.
+  const isAtMax = sel.selectedIndex >= sel.options.length - 1;
+  const xBounds = ts.length > 0 ? Object.assign(
+    { maxallowed: ts[ts.length - 1] },
+    isAtMax ? { minallowed: ts[0] } : {}
+  ) : {};
 
   // ── Particle count chart (log scale) ─────────────────────────────────────
   // yaxis.fixedrange: true  →  +/- and scroll-zoom only move the X (time) axis.
@@ -242,9 +248,11 @@ function filterAndRender() {
     const j   = LIVE_TS.findIndex(t => new Date(t) >= cut);
     return j < 0 ? LIVE_TS.length - 1 : j;
   })();
-  // Env chart uses its own data array (LIVE_TS), so compute its own minallowed.
-  const envXBounds = (isAtMax && LIVE_TS.length > livei)
-    ? { minallowed: LIVE_TS[livei] } : {};
+  // Env chart uses LIVE_TS — same logic: maxallowed always set, minallowed only at max.
+  const envXBounds = LIVE_TS.length > livei ? Object.assign(
+    { maxallowed: LIVE_TS[LIVE_TS.length - 1] },
+    isAtMax ? { minallowed: LIVE_TS[livei] } : {}
+  ) : {};
 
   Plotly.react('chart-env', [
     { x: LIVE_TS.slice(livei), y: TEMP_F.slice(livei), name: 'Temperature (°F)',
