@@ -302,9 +302,15 @@ let _zooming = false;
 function _stepZoom(direction) {
   if (_zooming) return;
   const sel      = document.getElementById('sel-range');
-  const newIndex = sel.selectedIndex + direction;
-  // Hard stops: clamp to valid range and do nothing if already at the limit.
-  if (newIndex < 0 || newIndex >= sel.options.length) return;
+  let newIndex = sel.selectedIndex + direction;
+  
+  // Hard stops: clamp to valid range.
+  // We MUST call filterAndRender() even if already at the limit, because if this
+  // was triggered by a modebar +/- click, Plotly natively zoomed the chart and
+  // we need filterAndRender() to snap it back to our hard limit.
+  if (newIndex < 0) newIndex = 0;
+  if (newIndex >= sel.options.length) newIndex = sel.options.length - 1;
+  
   sel.selectedIndex = newIndex;
   _zooming = true;
   filterAndRender().then(function () {
