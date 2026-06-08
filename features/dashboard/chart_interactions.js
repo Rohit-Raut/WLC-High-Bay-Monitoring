@@ -373,11 +373,35 @@ window._attachRelayoutListeners = function () {
 
       if (newSpanMs < currentSpanMs - 1000) {
         _stepZoom(-1);   // zoom-in (+) button
-      } else if (newSpanMs > currentSpanMs + 1000) {
-        _stepZoom(+1);   // zoom-out (-) button
       }
+      // Zoom-out (-) is handled by _attachZoomOutButtonListeners() via a direct
+      // click handler — span inference is unreliable for zoom-out because the
+      // maxallowed right-edge clamp and the nominal-vs-actual window mismatch
+      // keep the reported span from growing past currentSpanMs.
       // If spans are equal (pan), do nothing — chart stays at current window.
     });
+  });
+};
+
+// ── Attach modebar zoom-out (-) button listener ───────────────────────────────
+// Bind directly to Plotly's "Zoom out" modebar button (event delegation on each
+// chart div, so it survives modebar re-creation) and step to the next-larger
+// time window — identical behaviour to scroll-out and the '-' keyboard shortcut.
+//
+// Capture phase + stopPropagation: the modebar button is a NATIVE Plotly button,
+// so a click would otherwise ALSO run Plotly's built-in zoom-out, which fires a
+// plotly_relayout that races our _stepZoom(+1) through the shared _zooming guard
+// (intermittently swallowing the step). Intercepting in the capture phase lets us
+// cancel the native handler before it runs, so only our discrete step happens.
+window._attachZoomOutButtonListeners = function () {
+  ['chart-counts', 'chart-pm', 'chart-env'].forEach(function (divId) {
+    document.getElementById(divId).addEventListener('click', function (ev) {
+      if (ev.target.closest('[data-attr="zoom"][data-val="out"]')) {
+        ev.stopPropagation();   // block Plotly's native zoom-out handler
+        ev.preventDefault();
+        _stepZoom(+1);          // zoom-out (-) button → next-larger time window
+      }
+    }, true);   // true = capture phase, runs before the button's own handler
   });
 };
 
@@ -387,6 +411,8 @@ filterAndRender();
 window._attachWheelListeners();
 // Attach modebar +/- listeners after charts exist in the DOM.
 window._attachRelayoutListeners();
+// Attach the direct zoom-out (-) modebar button handler.
+window._attachZoomOutButtonListeners();
 
 document.addEventListener('click', function (e) {
   var drop = document.getElementById('notif-drop');
