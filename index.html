@@ -139,28 +139,12 @@
       <option value="1440" selected>Last 24 hr</option>
       <option value="2880">Last 2 days</option>
       <option value="4320">Last 3 days</option>
-      <option value="5760">Last 4 days</option>
-      <option value="7200">Last 5 days</option>
-      <option value="8640">Last 6 days</option>
       <option value="10080">Last 7 days</option>
-      <option value="11520">Last 8 days</option>
-      <option value="12960">Last 9 days</option>
-      <option value="14400">Last 10 days</option>
-      <option value="15840">Last 11 days</option>
-      <option value="17280">Last 12 days</option>
-      <option value="18720">Last 13 days</option>
-      <option value="20160">Last 14 days</option>
-      <option value="21600">Last 15 days</option>
-      <option value="23040">Last 16 days</option>
-      <option value="24480">Last 17 days</option>
-      <option value="25920">Last 18 days</option>
-      <option value="27360">Last 19 days</option>
-      <option value="28800">Last 20 days</option>
     </select>
   </div>
-  <div class="updated">Last pushed: 2026-06-08 11:20:55</div>
+  <div class="updated">Last pushed: 2026-06-08 11:28:12</div>
   <div style="flex:1"></div>
-  <div class="notif-wrap"><button class="notif-btn" onclick="document.getElementById('notif-drop').classList.toggle('open')">⊙ ALERTS <span style="color:#f87171">&#9679;</span></button><div class="notif-drop" id="notif-drop"><div class="notif-hdr">⊙ SYSTEM STATUS</div><div class="notif-row ni-alert">● Last sample: 2026-06-07 17:32:11 (17 hr 48 min ago)</div><div class="notif-row ni-warn">▲ ISO class: ISO 7 — marginal (target: ISO 6)</div><div class="notif-row ni-warn">▲ ≥0.5µm 57,559/m³ — exceeds ISO 6 (35 200)</div><div class="notif-row ni-alert">▲ ≥0.3µm 2,728,244/m³ — above contamination threshold</div><div class="notif-row ni-ok">● Laser: OK</div><div class="notif-row ni-ok">● Flow sensor: OK</div><div class="notif-row ni-ok">● RH 62% — nominal</div><div class="notif-row ni-ok">● Temp 18.9°C / 66°F — nominal</div><div class="notif-row ni-mute">○ No alerts emailed in last 24 hr</div></div></div>
+  <div class="notif-wrap"><button class="notif-btn" onclick="document.getElementById('notif-drop').classList.toggle('open')">⊙ ALERTS <span style="color:#f87171">&#9679;</span></button><div class="notif-drop" id="notif-drop"><div class="notif-hdr">⊙ SYSTEM STATUS</div><div class="notif-row ni-alert">● Last sample: 2026-06-07 17:32:11 (17 hr 56 min ago)</div><div class="notif-row ni-warn">▲ ISO class: ISO 7 — marginal (target: ISO 6)</div><div class="notif-row ni-warn">▲ ≥0.5µm 57,559/m³ — exceeds ISO 6 (35 200)</div><div class="notif-row ni-alert">▲ ≥0.3µm 2,728,244/m³ — above contamination threshold</div><div class="notif-row ni-ok">● Laser: OK</div><div class="notif-row ni-ok">● Flow sensor: OK</div><div class="notif-row ni-ok">● RH 62% — nominal</div><div class="notif-row ni-ok">● Temp 18.9°C / 66°F — nominal</div><div class="notif-row ni-mute">○ No alerts emailed in last 24 hr</div></div></div>
   <div class="iso-badge" style="color:#facc15;border-color:#facc15;margin-left:14px;">ISO&nbsp;7</div>
 </div>
 
@@ -368,7 +352,10 @@ function updateStats(i) {
 // ── Main render function ──────────────────────────────────────────────────────
 function filterAndRender() {
   const sel  = document.getElementById('sel-range');
-  const mins = parseInt(sel.value);
+  if (!_zooming) {
+    _currentLimitMins = parseInt(sel.value);
+  }
+  const mins = _currentLimitMins;
   const i    = sliceIdx(mins);
   const ts   = TS.slice(i);
   const gaps = gapShapes(ts);
@@ -376,9 +363,9 @@ function filterAndRender() {
   // X axis hard bounds for particle charts:
   //   maxallowed = latest data point — always set so zooming/panning cannot
   //                drift into the future.
-  //   minallowed = 20 days hard floor — set when dropdown is at max option
+  //   minallowed = 20 days hard floor — set when we reach the 20-day limit
   //                to prevent panning/zooming past the 20-day ceiling.
-  const isAtMax = sel.selectedIndex >= sel.options.length - 1;
+  const isAtMax = _currentLimitMins >= 20 * 24 * 60;
   const dataEndMs = TS.length > 0 ? _parseDate(TS[TS.length - 1]).getTime() : 0;
   const hardFloorMs = dataEndMs - 20 * 24 * 60 * 60 * 1000;
   const xBounds = ts.length > 0 ? Object.assign(
@@ -549,6 +536,7 @@ function _toLocalStr(date) {
 const MIN_SPAN_MS = 10 * 60 * 1000;   // 10 minutes hard floor for zoom-in (approx 12 steps from 24h)
 
 let _zooming = false;   // re-entrancy guard — blocks recursive plotly_relayout
+let _currentLimitMins = 1440; // current time range limit in minutes (dynamic zoom out up to 20 days)
 
 // Track visible ranges of the charts to detect zoom-in and anchor appropriately.
 const _prevRange = { 'chart-counts': null, 'chart-pm': null, 'chart-env': null };
@@ -588,17 +576,22 @@ function _enforceZoomConstraints(divId, targetX0, targetX1, x0orig, x1orig) {
   // selected, the left edge can never go further back than 20 days from the
   // latest data point.
   const sel = document.getElementById('sel-range');
-  const mins = parseInt(sel.value);
+  const mins = _currentLimitMins;
   const minAllowedTime = dataEndMs - mins * 60 * 1000;
   const hardFloorMs    = dataEndMs - 20 * 24 * 60 * 60 * 1000;
 
   if (x0 < minAllowedTime) {
-    if (sel.selectedIndex < sel.options.length - 1) {
-      // Below max: step the dropdown up and reload (fire-and-forget — the
-      // correction relayout below handles the visible range immediately).
-      console.log(`[Zoom] ${divId} left edge crossed current window! Expanding dropdown from ${mins} mins.`);
+    if (_currentLimitMins < 20 * 24 * 60) {
+      // Below 20 days limit: step range up (and dropdown if below 7 days) and reload
+      console.log(`[Zoom] ${divId} left edge crossed current window! Expanding limit from ${mins} mins.`);
       _zooming = true;
-      sel.selectedIndex++;
+      if (sel.selectedIndex < sel.options.length - 1) {
+        sel.selectedIndex++;
+        _currentLimitMins = parseInt(sel.value);
+      } else {
+        // Dropdown is at max (7 days), step up internally by 1 day (1440 mins) at a time
+        _currentLimitMins = Math.min(20 * 24 * 60, _currentLimitMins + 24 * 60);
+      }
       filterAndRender().then(function () {
         _zooming = false;
       }).catch(function () {
