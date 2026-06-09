@@ -231,13 +231,27 @@ function filterAndRender() {
     ? { range: [LIVE_TS[livei], LIVE_TS[LIVE_TS.length - 1]], autorange: false }
     : {};
 
+  // Aggregate the dense ~10 s env data into 5-minute means, then show each bin
+  // as a scatter marker with measurement-uncertainty error bars:
+  //   temperature ±0.36 °F  (= ±0.2 °C instrument spec, converted to °F)
+  //   humidity    ±1 %
+  const ENV_BIN_MS = 5 * 60 * 1000;   // 5-minute aggregation buckets
+  const tempBin = binByTime(LIVE_TS.slice(livei), TEMP_F.slice(livei),  ENV_BIN_MS);
+  const rhBin   = binByTime(LIVE_TS.slice(livei), RH_VALS.slice(livei), ENV_BIN_MS);
+
   const p4 = Plotly.react('chart-env', [
-    { x: LIVE_TS.slice(livei), y: TEMP_F.slice(livei), name: 'Temperature (°F)',
-      type: 'scatter', mode: 'lines',
-      line: { color: '#dc2626', width: 3 }, yaxis: 'y' },
-    { x: LIVE_TS.slice(livei), y: RH_VALS.slice(livei), name: 'Humidity (%)',
-      type: 'scatter', mode: 'lines',
-      line: { color: '#1d4ed8', width: 3 }, yaxis: 'y2' },
+    { x: tempBin.x, y: tempBin.y, name: 'Temperature (°F)',
+      type: 'scatter', mode: 'markers',
+      marker: { color: '#dc2626', size: 5 },
+      error_y: { type: 'constant', value: 0.36, color: 'rgba(220,38,38,0.7)',
+                 thickness: 1, width: 2 },
+      yaxis: 'y' },
+    { x: rhBin.x, y: rhBin.y, name: 'Humidity (%)',
+      type: 'scatter', mode: 'markers',
+      marker: { color: '#1d4ed8', size: 5 },
+      error_y: { type: 'constant', value: 1, color: 'rgba(29,78,216,0.7)',
+                 thickness: 1, width: 2 },
+      yaxis: 'y2' },
   ], Object.assign({}, DARK, {
     margin: { l: 60, r: 70, t: 30, b: 50 },
     xaxis:  Object.assign({}, DARK.xaxis, { title: '' }, envBounds, envRange),
@@ -279,6 +293,34 @@ function _toLocalStr(date) {
   const p = n => String(n).padStart(2, '0');
   return date.getFullYear() + '-' + p(date.getMonth() + 1) + '-' + p(date.getDate())
        + ' ' + p(date.getHours()) + ':' + p(date.getMinutes()) + ':' + p(date.getSeconds());
+}
+
+// ── Time-bin aggregation ──────────────────────────────────────────────────────
+// The env data is sampled ~every 10 s, far too dense to show one error bar per
+// point. binByTime() groups parallel (timestamp, value) arrays into fixed-width
+// time buckets and returns the mean value per bucket, plotted at the mean
+// timestamp of the points in that bucket (so a marker never lands past the
+// latest sample). Empty/NaN values and empty buckets are skipped.
+function binByTime(tsArr, valArr, binMs) {
+  const buckets = new Map();   // bucketStartMs -> { sumV, sumT, n }
+  for (let k = 0; k < tsArr.length; k++) {
+    const v = valArr[k];
+    if (v === null || v === undefined || isNaN(v)) continue;
+    const tms = _parseDate(tsArr[k]).getTime();
+    if (isNaN(tms)) continue;
+    const key = Math.floor(tms / binMs) * binMs;
+    let b = buckets.get(key);
+    if (!b) { b = { sumV: 0, sumT: 0, n: 0 }; buckets.set(key, b); }
+    b.sumV += v; b.sumT += tms; b.n += 1;
+  }
+  const keys = Array.from(buckets.keys()).sort((a, b) => a - b);
+  const x = [], y = [];
+  for (const key of keys) {
+    const b = buckets.get(key);
+    x.push(_toLocalStr(new Date(b.sumT / b.n)));   // mean time within the bucket
+    y.push(b.sumV / b.n);                            // mean value within the bucket
+  }
+  return { x: x, y: y };
 }
 
 // ── Zoom state ────────────────────────────────────────────────────────────────
