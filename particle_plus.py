@@ -996,7 +996,7 @@ def generate_dashboard_html(csv_path, output_path):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <meta http-equiv="refresh" content="1800">
-<title>Wright Lab &#8212; DUNE High Bay Clean Room Monitoring</title>
+<title>Wright Lab ; DUNE High Bay Slow Control</title>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <style>
   /* ── theme variables — dark (default) ─────────────────────────────────── */
@@ -1066,13 +1066,28 @@ def generate_dashboard_html(csv_path, output_path):
   .header h1 {{
     color: #ffffff;
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 19px;
-    letter-spacing: 0.08em;
+    font-size: 21px;
+    letter-spacing: 0.1em;
     font-weight: normal;
-    margin-bottom: 3px;
+    margin-bottom: 6px;
+    line-height: 1.25;
   }}
+  .header h1 .h1-lab {{
+    padding-bottom: 2px;
+    border-bottom: 2px solid rgba(255,255,255,0.35);
+  }}
+  .header h1 .h1-comma {{ color: rgba(255,255,255,0.55); }}
   .header .sub {{
-    color: rgba(255,255,255,0.72); font-size: 11px; letter-spacing: 1px;
+    color: rgba(255,255,255,0.78);
+    font-family: Georgia, 'Times New Roman', serif;
+    font-style: italic;
+    font-size: 12.5px;
+    letter-spacing: 0.06em;
+  }}
+  .header .sub .sub-sep {{
+    color: rgba(255,255,255,0.45);
+    font-style: normal;
+    margin: 0 10px;
   }}
   .theme-toggle {{
     background: transparent;
@@ -1211,8 +1226,8 @@ def generate_dashboard_html(csv_path, output_path):
 
 <div class="header">
   <div class="header-text">
-    <h1>WRIGHT LAB &#8212; DUNE HIGH BAY CLEAN ROOM MONITORING</h1>
-    <div class="sub">Particle Plus Model 7301 &nbsp;&middot;&nbsp; Real-time Particulate &amp; Environmental Dashboard</div>
+    <h1><span class="h1-lab">WRIGHT LAB</span><span class="h1-dash">-</span> DUNE HIGH BAY SLOW CONTROL</h1>
+    <div class="sub">Particulate &amp; Environmental Monitor<span class="sub-sep">&middot;</span>Particles Plus 7301<span class="sub-sep">&middot;</span>CRP Production Area</div>
   </div>
   <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme">
     <span class="tt-light">&#9728;&nbsp; Light</span><span class="tt-dark">&#9790;&nbsp; Dark</span>

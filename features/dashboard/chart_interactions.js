@@ -88,6 +88,58 @@ function getPlotlyTheme() {
 function _themeMuted()  { return _isLightTheme() ? '#656d76' : '#8b949e'; }
 function _themeBorder() { return _isLightTheme() ? '#d0d7de' : '#30363d'; }
 
+// ── Per-theme trace palettes ─────────────────────────────────────────────────
+// Dark mode keeps the Wong colorblind-safe palette baked in by the generator.
+// On a white background those hues wash out (sky blue and amber especially),
+// so light mode remaps each channel to a darker color in the SAME hue family
+// (all ~4:1+ contrast on #ffffff) — the legend mapping stays intuitive when
+// switching themes.
+const TRACE_DARK  = ['#0072B2', '#E69F00', '#009E73', '#D55E00', '#56B4E9', '#CC79A7'];
+const TRACE_LIGHT = ['#0550AE', '#9A6700', '#1A7F37', '#BC4C00', '#0E7490', '#BF3989'];
+
+function _traceColor(c) {
+  if (!_isLightTheme() || !c) return c;
+  const i = TRACE_DARK.indexOf(String(c).toUpperCase());
+  return i >= 0 ? TRACE_LIGHT[i] : c;
+}
+
+// 'rgba(r,g,b,a)' from a '#rrggbb' hex — used for error-bar colors.
+function _rgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+
+// Re-color an array of generator-built traces for the active theme.
+function _themedTraces(traces) {
+  if (!_isLightTheme()) return traces;
+  return traces.map(tr => {
+    const out = Object.assign({}, tr);
+    if (out.line)   out.line   = Object.assign({}, out.line,   { color: _traceColor(out.line.color) });
+    if (out.marker) out.marker = Object.assign({}, out.marker, { color: _traceColor(out.marker.color) });
+    return out;
+  });
+}
+
+// Original bar colors of the size-distribution chart (its marker.color is an
+// array, one color per channel) — kept so re-renders can re-theme from source.
+const DIST_BASE_COLORS = (DIST[0] && DIST[0].marker && Array.isArray(DIST[0].marker.color))
+  ? DIST[0].marker.color.slice() : null;
+
+// The ISO 14644-1 reference-line greens are tuned for the dark background;
+// on white the lighter grades (ISO 5/6) are nearly invisible, so light mode
+// substitutes a darker green ramp (same ordering, ISO 6 still boldest).
+const ISO_LIGHT_COLORS = {
+  '#81c784': '#5a9e60',   // ISO 5
+  '#2ecc71': '#1a7f37',   // ISO 6 (bold)
+  '#27ae60': '#176d33',   // ISO 7
+  '#1e8449': '#115226',   // ISO 8
+  '#115f2e': '#0b3d1e',   // ISO 9
+};
+function _isoColor(c) {
+  if (!_isLightTheme()) return c;
+  return ISO_LIGHT_COLORS[String(c).toLowerCase()] || c;
+}
+
 // Full base layout shared by all charts: current theme colors + the static
 // sizing/behaviour options. Rebuilt on every render, so a theme toggle only
 // needs to call filterAndRender() to re-skin everything.
@@ -232,7 +284,7 @@ function isoShapes() {
   return ISO_LINES.map(l => ({
     type: 'line', xref: 'paper', x0: 0, x1: 1,
     yref: 'y', y0: l.y, y1: l.y,
-    line: { color: l.color, width: l.width, dash: l.dash },
+    line: { color: _isoColor(l.color), width: l.width, dash: l.dash },
   }));
 }
 function isoAnnotations() {
@@ -240,7 +292,7 @@ function isoAnnotations() {
     xref: 'paper', x: 1.02, yref: 'y', y: l.y,
     text: l.bold ? '<b>' + l.label + '</b>' : l.label,
     showarrow: false, xanchor: 'left',
-    font: { color: l.color, size: l.bold ? 12 : 10, family: 'Georgia, "Times New Roman", serif' },
+    font: { color: _isoColor(l.color), size: l.bold ? 12 : 10, family: 'Georgia, "Times New Roman", serif' },
   }));
 }
 
@@ -297,10 +349,12 @@ function filterAndRender() {
   const binMs   = binMins * 60000;
   const _binSel = document.getElementById('sel-bin');
   if (_binSel) _binSel.disabled = (mins > 1440);
-  const countsData = binMins > 0 ? _binnedTraces(sliceTraces(COUNTS, i), binMs)
-                                 : sliceTraces(COUNTS, i);
-  const pmData     = binMins > 0 ? _binnedTraces(sliceTraces(PM, i), binMs)
-                                 : sliceTraces(PM, i);
+  // _themedTraces runs BEFORE binning so the binned mean/max traces inherit
+  // the theme-corrected channel color too.
+  const countsRaw  = _themedTraces(sliceTraces(COUNTS, i));
+  const pmRaw      = _themedTraces(sliceTraces(PM, i));
+  const countsData = binMins > 0 ? _binnedTraces(countsRaw, binMs) : countsRaw;
+  const pmData     = binMins > 0 ? _binnedTraces(pmRaw, binMs)     : pmRaw;
 
   // ── Particle count chart (log scale) ─────────────────────────────────────
   // yaxis.fixedrange: true  →  scroll and +/- only move the X (time) axis.
@@ -335,11 +389,14 @@ function filterAndRender() {
     }), PLOTLY_CFG);
 
   // ── Size distribution bar chart ───────────────────────────────────────────
-  // Bar label + outline colors are baked into DIST by the generator; re-skin
-  // them to the current theme on every render.
+  // Bar colors, label and outline colors are baked into DIST by the generator;
+  // re-skin them to the current theme on every render.
   if (DIST[0]) {
     DIST[0].textfont = { color: _themeMuted(), size: 11 };
-    if (DIST[0].marker) DIST[0].marker.line = { color: _themeBorder(), width: 1 };
+    if (DIST[0].marker) {
+      DIST[0].marker.line = { color: _themeBorder(), width: 1 };
+      if (DIST_BASE_COLORS) DIST[0].marker.color = DIST_BASE_COLORS.map(_traceColor);
+    }
   }
   const _distMax    = (DIST[0] && DIST[0].y.length) ? Math.max(...DIST[0].y) : 100;
   const _distLogMax = Math.log10(Math.max(_distMax, 1)) + 1.0;
@@ -377,19 +434,21 @@ function filterAndRender() {
   const tempBin = binByTime(LIVE_TS.slice(livei), TEMP_F.slice(livei),  ENV_BIN_MS);
   const rhBin   = binByTime(LIVE_TS.slice(livei), RH_VALS.slice(livei), ENV_BIN_MS);
 
-  // Wong palette: temperature = vermillion, humidity = blue — identical in
-  // both themes (colorblind-safe on dark and light backgrounds).
+  // Temperature = vermillion family, humidity = blue family; _traceColor()
+  // swaps in the darker light-mode variant of each on white backgrounds.
+  const tempCol = _traceColor('#D55E00');
+  const rhCol   = _traceColor('#0072B2');
   const p4 = Plotly.react('chart-env', [
     { x: tempBin.x, y: tempBin.y, name: 'Temperature (°F)',
       type: 'scatter', mode: 'markers',
-      marker: { color: '#D55E00', size: 5 },
-      error_y: { type: 'constant', value: 0.36, color: 'rgba(213,94,0,0.7)',
+      marker: { color: tempCol, size: 5 },
+      error_y: { type: 'constant', value: 0.36, color: _rgba(tempCol, 0.7),
                  thickness: 1, width: 2 },
       yaxis: 'y' },
     { x: rhBin.x, y: rhBin.y, name: 'Humidity (%)',
       type: 'scatter', mode: 'markers',
-      marker: { color: '#0072B2', size: 5 },
-      error_y: { type: 'constant', value: 1, color: 'rgba(0,114,178,0.7)',
+      marker: { color: rhCol, size: 5 },
+      error_y: { type: 'constant', value: 1, color: _rgba(rhCol, 0.7),
                  thickness: 1, width: 2 },
       yaxis: 'y2' },
   ], Object.assign({}, DARK, {

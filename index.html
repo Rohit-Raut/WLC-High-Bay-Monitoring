@@ -14,7 +14,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <meta http-equiv="refresh" content="1800">
-<title>Wright Lab &#8212; DUNE High Bay Clean Room Monitoring</title>
+<title>Wright Lab ; DUNE High Bay Slow Control</title>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <style>
   /* ── theme variables — dark (default) ─────────────────────────────────── */
@@ -84,13 +84,28 @@
   .header h1 {
     color: #ffffff;
     font-family: Georgia, 'Times New Roman', serif;
-    font-size: 19px;
-    letter-spacing: 0.08em;
+    font-size: 21px;
+    letter-spacing: 0.1em;
     font-weight: normal;
-    margin-bottom: 3px;
+    margin-bottom: 6px;
+    line-height: 1.25;
   }
+  .header h1 .h1-lab {
+    padding-bottom: 2px;
+    border-bottom: 2px solid rgba(255,255,255,0.35);
+  }
+  .header h1 .h1-comma { color: rgba(255,255,255,0.55); }
   .header .sub {
-    color: rgba(255,255,255,0.72); font-size: 11px; letter-spacing: 1px;
+    color: rgba(255,255,255,0.78);
+    font-family: Georgia, 'Times New Roman', serif;
+    font-style: italic;
+    font-size: 12.5px;
+    letter-spacing: 0.06em;
+  }
+  .header .sub .sub-sep {
+    color: rgba(255,255,255,0.45);
+    font-style: normal;
+    margin: 0 10px;
   }
   .theme-toggle {
     background: transparent;
@@ -229,8 +244,8 @@
 
 <div class="header">
   <div class="header-text">
-    <h1>WRIGHT LAB &#8212; DUNE HIGH BAY CLEAN ROOM MONITORING</h1>
-    <div class="sub">Particle Plus Model 7301 &nbsp;&middot;&nbsp; Real-time Particulate &amp; Environmental Dashboard</div>
+    <h1><span class="h1-lab">WRIGHT LAB</span><span class="h1-dash">-</span> DUNE HIGH BAY SLOW CONTROL</h1>
+    <div class="sub">Particulate &amp; Environmental Monitor<span class="sub-sep">&middot;</span>Particles Plus 7301<span class="sub-sep">&middot;</span>CRP Production Area</div>
   </div>
   <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme">
     <span class="tt-light">&#9728;&nbsp; Light</span><span class="tt-dark">&#9790;&nbsp; Dark</span>
@@ -255,7 +270,7 @@
       <option value="10080">Last 7 days</option>
     </select>
   </div>
-  <div class="updated">Last pushed: 2026-06-09 23:30:52</div>
+  <div class="updated">Last pushed: 2026-06-09 23:50:57</div>
   <div style="flex:1"></div>
   <div class="notif-wrap"><button class="notif-btn" onclick="document.getElementById('notif-drop').classList.toggle('open')">⊙ ALERTS <span class="status-fault">&#9679;</span></button><div class="notif-drop" id="notif-drop"><div class="notif-hdr">⊙ SYSTEM STATUS</div><div class="notif-row ni-alert">● Last sample: 2026-06-07 17:32:11 (2 day(s) ago)</div><div class="notif-row ni-warn">▲ ISO class: ISO 7 — marginal (target: ISO 6)</div><div class="notif-row ni-warn">▲ ≥0.5µm 57,559/m³ — exceeds ISO 6 (35 200)</div><div class="notif-row ni-alert">▲ ≥0.3µm 2,728,244/m³ — above contamination threshold</div><div class="notif-row ni-ok">● Laser: OK</div><div class="notif-row ni-ok">● Flow sensor: OK</div><div class="notif-row ni-ok">● RH 62% — nominal</div><div class="notif-row ni-ok">● Temp 18.9°C / 66°F — nominal</div><div class="notif-row ni-mute">○ No alerts emailed in last 24 hr</div></div></div>
   <div class="iso-badge status-warn" style="margin-left:14px;">ISO&nbsp;7</div>
@@ -396,6 +411,58 @@ function getPlotlyTheme() {
 // Secondary-text and border colors per theme (axis ticks, bar value labels).
 function _themeMuted()  { return _isLightTheme() ? '#656d76' : '#8b949e'; }
 function _themeBorder() { return _isLightTheme() ? '#d0d7de' : '#30363d'; }
+
+// ── Per-theme trace palettes ─────────────────────────────────────────────────
+// Dark mode keeps the Wong colorblind-safe palette baked in by the generator.
+// On a white background those hues wash out (sky blue and amber especially),
+// so light mode remaps each channel to a darker color in the SAME hue family
+// (all ~4:1+ contrast on #ffffff) — the legend mapping stays intuitive when
+// switching themes.
+const TRACE_DARK  = ['#0072B2', '#E69F00', '#009E73', '#D55E00', '#56B4E9', '#CC79A7'];
+const TRACE_LIGHT = ['#0550AE', '#9A6700', '#1A7F37', '#BC4C00', '#0E7490', '#BF3989'];
+
+function _traceColor(c) {
+  if (!_isLightTheme() || !c) return c;
+  const i = TRACE_DARK.indexOf(String(c).toUpperCase());
+  return i >= 0 ? TRACE_LIGHT[i] : c;
+}
+
+// 'rgba(r,g,b,a)' from a '#rrggbb' hex — used for error-bar colors.
+function _rgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+
+// Re-color an array of generator-built traces for the active theme.
+function _themedTraces(traces) {
+  if (!_isLightTheme()) return traces;
+  return traces.map(tr => {
+    const out = Object.assign({}, tr);
+    if (out.line)   out.line   = Object.assign({}, out.line,   { color: _traceColor(out.line.color) });
+    if (out.marker) out.marker = Object.assign({}, out.marker, { color: _traceColor(out.marker.color) });
+    return out;
+  });
+}
+
+// Original bar colors of the size-distribution chart (its marker.color is an
+// array, one color per channel) — kept so re-renders can re-theme from source.
+const DIST_BASE_COLORS = (DIST[0] && DIST[0].marker && Array.isArray(DIST[0].marker.color))
+  ? DIST[0].marker.color.slice() : null;
+
+// The ISO 14644-1 reference-line greens are tuned for the dark background;
+// on white the lighter grades (ISO 5/6) are nearly invisible, so light mode
+// substitutes a darker green ramp (same ordering, ISO 6 still boldest).
+const ISO_LIGHT_COLORS = {
+  '#81c784': '#5a9e60',   // ISO 5
+  '#2ecc71': '#1a7f37',   // ISO 6 (bold)
+  '#27ae60': '#176d33',   // ISO 7
+  '#1e8449': '#115226',   // ISO 8
+  '#115f2e': '#0b3d1e',   // ISO 9
+};
+function _isoColor(c) {
+  if (!_isLightTheme()) return c;
+  return ISO_LIGHT_COLORS[String(c).toLowerCase()] || c;
+}
 
 // Full base layout shared by all charts: current theme colors + the static
 // sizing/behaviour options. Rebuilt on every render, so a theme toggle only
@@ -541,7 +608,7 @@ function isoShapes() {
   return ISO_LINES.map(l => ({
     type: 'line', xref: 'paper', x0: 0, x1: 1,
     yref: 'y', y0: l.y, y1: l.y,
-    line: { color: l.color, width: l.width, dash: l.dash },
+    line: { color: _isoColor(l.color), width: l.width, dash: l.dash },
   }));
 }
 function isoAnnotations() {
@@ -549,7 +616,7 @@ function isoAnnotations() {
     xref: 'paper', x: 1.02, yref: 'y', y: l.y,
     text: l.bold ? '<b>' + l.label + '</b>' : l.label,
     showarrow: false, xanchor: 'left',
-    font: { color: l.color, size: l.bold ? 12 : 10, family: 'Georgia, "Times New Roman", serif' },
+    font: { color: _isoColor(l.color), size: l.bold ? 12 : 10, family: 'Georgia, "Times New Roman", serif' },
   }));
 }
 
@@ -606,10 +673,12 @@ function filterAndRender() {
   const binMs   = binMins * 60000;
   const _binSel = document.getElementById('sel-bin');
   if (_binSel) _binSel.disabled = (mins > 1440);
-  const countsData = binMins > 0 ? _binnedTraces(sliceTraces(COUNTS, i), binMs)
-                                 : sliceTraces(COUNTS, i);
-  const pmData     = binMins > 0 ? _binnedTraces(sliceTraces(PM, i), binMs)
-                                 : sliceTraces(PM, i);
+  // _themedTraces runs BEFORE binning so the binned mean/max traces inherit
+  // the theme-corrected channel color too.
+  const countsRaw  = _themedTraces(sliceTraces(COUNTS, i));
+  const pmRaw      = _themedTraces(sliceTraces(PM, i));
+  const countsData = binMins > 0 ? _binnedTraces(countsRaw, binMs) : countsRaw;
+  const pmData     = binMins > 0 ? _binnedTraces(pmRaw, binMs)     : pmRaw;
 
   // ── Particle count chart (log scale) ─────────────────────────────────────
   // yaxis.fixedrange: true  →  scroll and +/- only move the X (time) axis.
@@ -644,11 +713,14 @@ function filterAndRender() {
     }), PLOTLY_CFG);
 
   // ── Size distribution bar chart ───────────────────────────────────────────
-  // Bar label + outline colors are baked into DIST by the generator; re-skin
-  // them to the current theme on every render.
+  // Bar colors, label and outline colors are baked into DIST by the generator;
+  // re-skin them to the current theme on every render.
   if (DIST[0]) {
     DIST[0].textfont = { color: _themeMuted(), size: 11 };
-    if (DIST[0].marker) DIST[0].marker.line = { color: _themeBorder(), width: 1 };
+    if (DIST[0].marker) {
+      DIST[0].marker.line = { color: _themeBorder(), width: 1 };
+      if (DIST_BASE_COLORS) DIST[0].marker.color = DIST_BASE_COLORS.map(_traceColor);
+    }
   }
   const _distMax    = (DIST[0] && DIST[0].y.length) ? Math.max(...DIST[0].y) : 100;
   const _distLogMax = Math.log10(Math.max(_distMax, 1)) + 1.0;
@@ -686,19 +758,21 @@ function filterAndRender() {
   const tempBin = binByTime(LIVE_TS.slice(livei), TEMP_F.slice(livei),  ENV_BIN_MS);
   const rhBin   = binByTime(LIVE_TS.slice(livei), RH_VALS.slice(livei), ENV_BIN_MS);
 
-  // Wong palette: temperature = vermillion, humidity = blue — identical in
-  // both themes (colorblind-safe on dark and light backgrounds).
+  // Temperature = vermillion family, humidity = blue family; _traceColor()
+  // swaps in the darker light-mode variant of each on white backgrounds.
+  const tempCol = _traceColor('#D55E00');
+  const rhCol   = _traceColor('#0072B2');
   const p4 = Plotly.react('chart-env', [
     { x: tempBin.x, y: tempBin.y, name: 'Temperature (°F)',
       type: 'scatter', mode: 'markers',
-      marker: { color: '#D55E00', size: 5 },
-      error_y: { type: 'constant', value: 0.36, color: 'rgba(213,94,0,0.7)',
+      marker: { color: tempCol, size: 5 },
+      error_y: { type: 'constant', value: 0.36, color: _rgba(tempCol, 0.7),
                  thickness: 1, width: 2 },
       yaxis: 'y' },
     { x: rhBin.x, y: rhBin.y, name: 'Humidity (%)',
       type: 'scatter', mode: 'markers',
-      marker: { color: '#0072B2', size: 5 },
-      error_y: { type: 'constant', value: 1, color: 'rgba(0,114,178,0.7)',
+      marker: { color: rhCol, size: 5 },
+      error_y: { type: 'constant', value: 1, color: _rgba(rhCol, 0.7),
                  thickness: 1, width: 2 },
       yaxis: 'y2' },
   ], Object.assign({}, DARK, {
