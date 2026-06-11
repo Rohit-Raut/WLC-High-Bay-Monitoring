@@ -209,8 +209,18 @@ function sliceTraces(traces, i) {
 // The particle/PM data is ~every 4 min. The Bin dropdown (Raw / 10 / 30 / 60 min)
 // optionally aggregates it. Per bin we keep BOTH the mean (trend) and the max
 // (so contamination spikes are not averaged away).
+// IS_LOCAL is embedded by the generator (true only for the noether-local
+// full-history dashboard). Guarded so this file also works in older pages
+// where the constant does not exist.
+function _localMode() {
+  return typeof IS_LOCAL !== 'undefined' && IS_LOCAL;
+}
+
 function _currentBinMins(rangeMins) {
-  if (rangeMins > 1440) return 0;          // auto-disable binning beyond 24 h → Raw
+  // Online: auto-disable binning beyond 24 h → Raw (windows are small anyway).
+  // Local full-history mode keeps binning available for every window — it is
+  // the main defense against rendering an unbounded archive point-by-point.
+  if (rangeMins > 1440 && !_localMode()) return 0;
   const sel = document.getElementById('sel-bin');
   if (!sel) return 0;                       // dropdown not present yet → Raw
   const v = parseInt(sel.value);
@@ -351,7 +361,7 @@ function filterAndRender() {
   const binMins = _currentBinMins(mins);
   const binMs   = binMins * 60000;
   const _binSel = document.getElementById('sel-bin');
-  if (_binSel) _binSel.disabled = (mins > 1440);
+  if (_binSel) _binSel.disabled = (mins > 1440 && !_localMode());
   // _themedTraces runs BEFORE binning so the binned mean/max traces inherit
   // the theme-corrected channel color too.
   const countsRaw  = _themedTraces(sliceTraces(COUNTS, i));

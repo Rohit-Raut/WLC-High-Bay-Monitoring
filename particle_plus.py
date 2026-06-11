@@ -391,10 +391,19 @@ def erase_counter(client):
 
 # ─── GITHUB PAGES DASHBOARD ───────────────────────────────────────────────────
 
-def generate_dashboard_html(csv_path, output_path):
+def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
+                            local=False):
     """
-    Read last 30 days of CSV data and generate a self-contained static HTML
-    dashboard matching the dashboard.py visual design for GitHub Pages.
+    Read CSV data and generate a self-contained static HTML dashboard.
+
+    Defaults produce the public GitHub Pages dashboard (last 30 days).
+    The local-only full-history variant (local_serve.py, noether) passes:
+      days=None      — no particle-data cutoff (full archive)
+      env_days=None  — no env-snapshot cutoff
+      local=True     — extended time-range options (14/30/90 days, All),
+                       a LOCAL badge in the header, "Generated" label, and
+                       IS_LOCAL=true embedded for the chart JS (enables
+                       binning beyond the 24 h window).
     """
     import json
 
@@ -416,8 +425,9 @@ def generate_dashboard_html(csv_path, output_path):
             reader = csv.DictReader(f)
             rows = list(reader)
 
-    # filter last 30 days — live.csv is already trimmed; this catches edge cases
-    cutoff = datetime.now() - timedelta(days=30)
+    # filter to the last `days` days (None = keep everything) — live.csv is
+    # already trimmed; this catches edge cases
+    cutoff = (datetime.now() - timedelta(days=days)) if days is not None else None
     recent = []
     for row in rows:
         dt = None
@@ -438,10 +448,12 @@ def generate_dashboard_html(csv_path, output_path):
                     except Exception:
                         pass
         # include if timestamp is recent, or if no timestamp at all (unknown age)
-        if dt is None or dt >= cutoff:
+        if cutoff is None or dt is None or dt >= cutoff:
             recent.append(row)
 
-    log(f"Dashboard: {len(recent)} records in last 30 days (cutoff: {cutoff.strftime('%Y-%m-%d %H:%M:%S')})")
+    log(f"Dashboard: {len(recent)} records "
+        + (f"in last {days} days (cutoff: {cutoff.strftime('%Y-%m-%d %H:%M:%S')})"
+           if cutoff is not None else "(full history, no cutoff)"))
 
     # ── helpers ───────────────────────────────────────────────────────────────
     def sf(val):
@@ -603,7 +615,7 @@ def generate_dashboard_html(csv_path, output_path):
 
     # ── env snapshot CSV: counter only stores temp/RH in the live reading (record 0),
     #    not in historical records — read ENV_SNAPSHOT_CSV for the env chart/cards ──
-    live_cutoff = datetime.now() - timedelta(days=8)
+    live_cutoff = (datetime.now() - timedelta(days=env_days)) if env_days is not None else None
     live_ts      = []
     live_temp_f  = []
     live_rh_vals = []
@@ -625,7 +637,7 @@ def generate_dashboard_html(csv_path, output_path):
                     continue
                 try:
                     _dt = datetime.fromisoformat(_ts)
-                    if _dt >= live_cutoff:
+                    if live_cutoff is None or _dt >= live_cutoff:
                         _shift = len(_row) - len(_hdr)   # 0 old rows, 1 new rows
                         _tc_raw = _row[_tc_col + _shift] if _tc_col is not None else None
                         _rh_raw = _row[_rh_col + _shift] if _rh_col is not None else None
@@ -743,6 +755,27 @@ def generate_dashboard_html(csv_path, output_path):
     iso_lines_js = json.dumps(_iso_ref_lines)
 
     updated = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # ── time-range dropdown options ───────────────────────────────────────────
+    # The local (noether-only) dashboard gets extended ranges over the full
+    # archive; value is the window in minutes, 0 = no cutoff ("All data" —
+    # sliceIdxForArray() in chart_interactions.js treats 0 as "from start").
+    _ranges = [
+        (30, 'Last 30 min'), (60, 'Last 1 hr'), (120, 'Last 2 hr'),
+        (180, 'Last 3 hr'), (360, 'Last 6 hr'), (720, 'Last 12 hr'),
+        (1440, 'Last 24 hr'), (2880, 'Last 2 days'), (4320, 'Last 3 days'),
+        (10080, 'Last 7 days'),
+    ]
+    if local:
+        _ranges += [(20160, 'Last 14 days'), (43200, 'Last 30 days'),
+                    (129600, 'Last 90 days'), (0, 'All data')]
+    range_options_html = ''.join(
+        f'<option value="{v}"{" selected" if v == 1440 else ""}>{lab}</option>'
+        for v, lab in _ranges)
+
+    updated_label    = 'Generated' if local else 'Last pushed'
+    local_badge_html = '<span class="local-badge">LOCAL</span>' if local else ''
+    is_local_js      = 'true' if local else 'false'
 
     # ── ISO 14644-1:2015 classification ───────────────────────────────────────
     # Keyed by (class, size_um) → max cumulative particles/m³.
@@ -1086,6 +1119,14 @@ def generate_dashboard_html(csv_path, output_path):
     font-style: normal;
     margin: 0 10px;
   }}
+  /* badge shown only on the noether-local full-history dashboard */
+  .local-badge {{
+    display: inline-block; vertical-align: middle; margin-left: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 10px; font-weight: bold; letter-spacing: 2.5px;
+    color: #ffd75f; border: 1px solid rgba(255,215,95,0.65);
+    border-radius: 4px; padding: 3px 9px 2px;
+  }}
   .theme-toggle {{
     background: transparent;
     border: 1px solid rgba(255,255,255,0.45);
@@ -1223,7 +1264,7 @@ def generate_dashboard_html(csv_path, output_path):
 
 <div class="header">
   <div class="header-text">
-    <h1>DUNE CRP ASSEMBLY SITE SLOW CONTROL</h1>
+    <h1>DUNE CRP ASSEMBLY SITE SLOW CONTROL{local_badge_html}</h1>
     <div class="sub">Particulate &amp; Environmental Monitor<span class="sub-sep">&middot;</span>Particles Plus 7301<span class="sub-sep">&middot;</span>CRP Assembly Tent</div>
   </div>
   <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme">
@@ -1236,20 +1277,9 @@ def generate_dashboard_html(csv_path, output_path):
 <div class="controls">
   <div class="ctrl-group">
     <label>Time Range</label>
-    <select id="sel-range" onchange="filterAndRender()">
-      <option value="30">Last 30 min</option>
-      <option value="60">Last 1 hr</option>
-      <option value="120">Last 2 hr</option>
-      <option value="180">Last 3 hr</option>
-      <option value="360">Last 6 hr</option>
-      <option value="720">Last 12 hr</option>
-      <option value="1440" selected>Last 24 hr</option>
-      <option value="2880">Last 2 days</option>
-      <option value="4320">Last 3 days</option>
-      <option value="10080">Last 7 days</option>
-    </select>
+    <select id="sel-range" onchange="filterAndRender()">{range_options_html}</select>
   </div>
-  <div class="updated">Last pushed: {updated}</div>
+  <div class="updated">{updated_label}: {updated}</div>
   <div style="flex:1"></div>
   {notif_panel_html}
   {iso_badge_html}
@@ -1298,6 +1328,7 @@ const LIVE_TS  = {live_ts_js};
 const TEMP_F   = {temp_f_js};
 const RH_VALS  = {rh_js};
 const ISO_LINES = {iso_lines_js};
+const IS_LOCAL  = {is_local_js};
 </script>
 <script>
 /* chart_interactions.js — embedded by particle_plus.py::generate_dashboard_html() */

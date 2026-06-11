@@ -27,5 +27,9 @@ features/alerts/alerts_secrets.py
 slides_outline.md
 SESSION_HANDOFF.md
 
+# Noether-only full-history dashboard output (local_serve.py) — NEVER push:
+# it contains the complete archive, not the public 30-day window
+index_local.html
+
 # macOS
 .DS_Store
