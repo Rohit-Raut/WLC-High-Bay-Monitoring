@@ -802,7 +802,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         f'<option value="{v}"{" selected" if v == 1440 else ""}>{lab}</option>'
         for v, lab in _ranges)
 
-    updated_label    = 'Generated' if local else 'Last pushed'
+    updated_label    = 'Generated' if local else 'Last Data Updated'
     local_badge_html = '<span class="local-badge">LOCAL</span>' if local else ''
     is_local_js      = 'true' if local else 'false'
     # Public dashboard fits the whole display in one viewport (TV mode);
