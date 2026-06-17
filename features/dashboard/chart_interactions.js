@@ -410,7 +410,7 @@ function filterAndRender() {
       showlegend: false,
       bargap:     0.3,
       yaxis: Object.assign({}, DARK.yaxis, {
-        title:      'Counts / m³',
+        title:      'Counts',
         type:       'log',
         range:      [-0.5, _distLogMax],
         autorange:  false,
