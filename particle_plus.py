@@ -54,7 +54,7 @@ SAMPLE_TIME_S       = 60      # 1 minute sample
 HOLD_TIME_S         = 0       # 0 = continuous sampling (no pause between samples)
                               # Set to 60, 240, 300, etc. for slower sampling
 DELAY_TIME_S        = 5       # pump stabilization
-CYCLES              = 1       # 1 sample per cycle then hold
+CYCLES              = 0       # 1 sample per cycle then hold
 
 # sync/erase
 ERASE_AFTER_SYNC    = False   # set True after verifying data
