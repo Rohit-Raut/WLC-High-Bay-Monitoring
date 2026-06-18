@@ -81,7 +81,14 @@ _counter_online = True
 _last_seen      = None   # datetime of last successful data pull
 
 import threading
+import queue
 _modbus_lock = threading.Lock()   # only one thread talks to the counter at a time
+
+# Background processing queue for heavy work (CSV rebuild, GitHub push)
+# This allows us to do expensive operations during the 60s counting phase
+# instead of blocking between samples
+_background_queue = queue.Queue()
+_background_thread = None
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -1540,6 +1547,38 @@ def connect():
     return client
 
 
+def _background_worker():
+    """
+    Background thread that processes heavy tasks (CSV rebuild, GitHub push)
+    during the 60s counting phase, so they don't block between samples.
+    """
+    while True:
+        try:
+            task = _background_queue.get()
+            if task is None:  # Shutdown signal
+                break
+
+            task_type = task.get('type')
+            if task_type == 'rebuild_and_push':
+                # Heavy operations moved here from main loop
+                try:
+                    from features.data_manager import rebuild_live_csv
+                    n_live = rebuild_live_csv(ARCHIVE_CSV, LIVE_CSV)
+                    log(f"[BG] live.csv rebuilt: {n_live} records (last 30 days)")
+
+                    # Check if it's time for GitHub push
+                    should_push = task.get('should_push', False)
+                    if should_push:
+                        mode_dashboard()
+                        log(f"[BG] GitHub push completed")
+                except Exception as e:
+                    log(f"[BG] Error in background task: {e}", 'ERROR')
+
+            _background_queue.task_done()
+        except Exception as e:
+            log(f"[BG] Background worker error: {e}", 'ERROR')
+
+
 def mode_sample():
     """
     Main 24/7 sampling loop.
@@ -1559,9 +1598,16 @@ def mode_sample():
     else:
         log(f"  Sampling every {HOLD_TIME_S}s ({HOLD_TIME_S//60} min)")
     log(f"  GitHub push interval: {GITHUB_PUSH_INTERVAL_S}s ({GITHUB_PUSH_INTERVAL_S//60} min)" if GITHUB_PUSH_INTERVAL_S > 0 else "  GitHub push: after every sample")
+    log(f"  Background processing: enabled (heavy tasks during counting phase)")
     log("="*55)
 
-    global _counter_online, _last_seen
+    # Start background worker thread
+    global _counter_online, _last_seen, _background_thread
+    if _background_thread is None:
+        _background_thread = threading.Thread(target=_background_worker, daemon=True)
+        _background_thread.start()
+        log("Background worker thread started")
+
     params_written = False
     last_github_push = time.time()  # Track when we last pushed to GitHub
 
@@ -1590,19 +1636,30 @@ def mode_sample():
                     completed = wait_for_complete(client)
 
                     if completed:
+                        # Quick sync of new records only (minimal overhead)
                         mode_sync(client=client)
                         _last_seen = datetime.now()
 
-                        # Push to GitHub based on time interval (decoupled from sampling)
+                        # Queue heavy operations for background thread
+                        # (CSV rebuild, GitHub push) - these run during next sample's counting phase
                         current_time = time.time()
                         time_since_last_push = current_time - last_github_push
+                        should_push = (GITHUB_PUSH_INTERVAL_S == 0 or
+                                       time_since_last_push >= GITHUB_PUSH_INTERVAL_S)
 
-                        if GITHUB_PUSH_INTERVAL_S == 0 or time_since_last_push >= GITHUB_PUSH_INTERVAL_S:
-                            mode_dashboard()
+                        if should_push:
                             last_github_push = current_time
-                            log(f"GitHub push completed (next push in {GITHUB_PUSH_INTERVAL_S}s)")
+
+                        # Queue background work (runs during next counting phase)
+                        _background_queue.put({
+                            'type': 'rebuild_and_push',
+                            'should_push': should_push
+                        })
+
+                        if should_push:
+                            log(f"Queued GitHub push to background (will execute during counting)")
                         else:
-                            log(f"Skipping GitHub push (next push in {int(GITHUB_PUSH_INTERVAL_S - time_since_last_push)}s)")
+                            log(f"Queued CSV rebuild to background (next push in {int(GITHUB_PUSH_INTERVAL_S - time_since_last_push)}s)")
 
                 except Exception as e:
                     log(f"Error in sample loop: {e}", 'ERROR')
@@ -1702,11 +1759,10 @@ def mode_sync(client=None):
             log(f"WARNING: {len(failed)} failed — NOT erasing", 'WARN')
             return False
 
-        # ── update sync state and rebuild 30-day live.csv ────────────────────
+        # ── update sync state ─────────────────────────────────────────────────
+        # (live.csv rebuild moved to background thread to minimize overhead)
         if saved:
             set_last_synced(COUNTER_STATE, total)
-            n_live = rebuild_live_csv(ARCHIVE_CSV, LIVE_CSV)
-            log(f"live.csv rebuilt: {n_live} records (last 30 days)")
 
         # ── auto-erase counter above TRIM_CAP ─────────────────────────────────
         # Erase only after features/auto_erase.py independently verifies that
