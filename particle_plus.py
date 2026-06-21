@@ -257,7 +257,6 @@ def sync_counter_clock(client):
         if rb_date == date_str:
             # Date matches, check if time is within ±10 seconds
             try:
-                from datetime import datetime, timedelta
                 sent_dt = datetime.strptime(f"{date_str} {time_str}", '%Y-%m-%d %H:%M:%S')
                 read_dt = datetime.strptime(f"{rb_date} {rb_time}", '%Y-%m-%d %H:%M:%S')
                 diff = abs((read_dt - sent_dt).total_seconds())
