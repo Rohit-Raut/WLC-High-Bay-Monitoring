@@ -137,20 +137,10 @@ echo ""
 echo -e "${BLUE}[5/7] Creating configuration file...${NC}"
 echo ""
 
-read -p "Do you want to enable GitHub Pages auto-push? [y/N]: " ENABLE_GITHUB
-ENABLE_GITHUB=${ENABLE_GITHUB:-N}
-
-if [[ "$ENABLE_GITHUB" =~ ^[Yy]$ ]]; then
-    GITHUB_ENABLED="true"
-    echo -e "${YELLOW}⚠ GitHub push enabled${NC}"
-    echo "Make sure you have:"
-    echo "  1. Forked this repo to your GitHub account"
-    echo "  2. Set up SSH key or token for git push"
-    echo "  3. Enabled GitHub Pages in repo settings"
-else
-    GITHUB_ENABLED="false"
-    echo -e "${GREEN}✓ GitHub push disabled (monitoring only)${NC}"
-fi
+# GitHub push is DISABLED by default (safe for new installations)
+# Users can enable it later by editing config.local.yaml if needed
+GITHUB_ENABLED="false"
+echo -e "${GREEN}✓ Configuration: monitoring mode (data collection only)${NC}"
 
 # ── Determine archive directory (automatic, no prompts) ───────────────────
 echo ""
