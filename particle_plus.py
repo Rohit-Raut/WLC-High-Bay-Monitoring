@@ -22,9 +22,29 @@ from datetime import datetime, timedelta
 from pymodbus.client import ModbusTcpClient
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
+# Optional: load from config.yaml / config.local.yaml (Feature 3)
+# Falls back to hardcoded values if config loading fails (backwards compatible)
 
-COUNTER_IP   = '10.66.66.68'
-PORT         = 502
+try:
+    from features.config_loader import load_config
+    _CONFIG = load_config(os.path.dirname(os.path.abspath(__file__)))
+    _USE_CONFIG = True
+except Exception as _e:
+    print(f"[WARN] Config loader not available ({_e}), using hardcoded defaults")
+    _CONFIG = None
+    _USE_CONFIG = False
+
+# Helper to get config value with fallback to hardcoded default
+def _cfg(section, key, default):
+    if _USE_CONFIG and _CONFIG:
+        try:
+            return _CONFIG.get(section, {}).get(key, default)
+        except Exception:
+            return default
+    return default
+
+COUNTER_IP   = _cfg('counter', 'ip', '10.66.66.68')
+PORT         = _cfg('counter', 'port', 502)
 
 BASE_DIR         = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR         = f'{BASE_DIR}/data'
@@ -33,7 +53,7 @@ DATA_DIR         = f'{BASE_DIR}/data'
 # project space when available, so it survives fresh `git clone`s — a new
 # checkout can just run the server against the existing data. Falls back to
 # the repo-local data/ dir where that path doesn't exist (e.g. Mac dev).
-PROJECT_DATA_DIR = '/project/dune/slow_control/particle_plus'
+PROJECT_DATA_DIR = _cfg('paths', 'project_data_dir', '/project/dune/slow_control/particle_plus')
 try:
     if os.path.isdir(os.path.dirname(PROJECT_DATA_DIR)):
         os.makedirs(PROJECT_DATA_DIR, exist_ok=True)
@@ -50,29 +70,27 @@ LOG_FILE         = f'{BASE_DIR}/sync_log.txt'
 PID_FILE         = f'{BASE_DIR}/particle_plus.pid'
 
 # sampling schedule
-SAMPLE_TIME_S       = 60      # 1 minute sample
-HOLD_TIME_S         = 0       # 0 = continuous sampling (no pause between samples)
-                              # Set to 60, 240, 300, etc. for slower sampling
-DELAY_TIME_S        = 5       # pump stabilization
-CYCLES              = 0       # 1 sample per cycle then hold
+SAMPLE_TIME_S       = _cfg('sampling', 'sample_time_s', 60)
+HOLD_TIME_S         = _cfg('sampling', 'hold_time_s', 0)
+DELAY_TIME_S        = _cfg('sampling', 'delay_time_s', 5)
+CYCLES              = _cfg('sampling', 'cycles', 0)
 
 # sync/erase
-ERASE_AFTER_SYNC    = False   # set True after verifying data
-MIN_RECORDS_TO_SYNC = 1
-TRIM_CAP            = 20_000  # auto-erase when counter exceeds this many records
+ERASE_AFTER_SYNC    = _cfg('sync', 'erase_after_sync', False)
+MIN_RECORDS_TO_SYNC = _cfg('sync', 'min_records_to_sync', 1)
+TRIM_CAP            = _cfg('sync', 'trim_cap', 20000)
 
 # github — repo root = BASE_DIR so index.html lands at root (GitHub Pages)
-GITHUB_REPO_DIR     = BASE_DIR
-GITHUB_BRANCH       = 'main'
-GITHUB_REMOTE       = 'origin'
-GITHUB_PUSH_INTERVAL_S = 300  # Push to GitHub every 5 minutes (decoupled from sampling)
-                              # Set to 0 to push after every sample (old behavior)
+GITHUB_REPO_DIR     = _cfg('github', 'repo_dir', None) or BASE_DIR
+GITHUB_BRANCH       = _cfg('github', 'branch', 'main')
+GITHUB_REMOTE       = _cfg('github', 'remote', 'origin')
+GITHUB_PUSH_INTERVAL_S = _cfg('github', 'push_interval_s', 300)
 
 # Counter admin password — must be written to register 1000 BEFORE any Protected
 # Write (PW) register can be written.  Registers 1016 (Date) and 1027 (Time) are
 # R+PW, so without this the clock writes silently fail and date/time stay empty.
 # Default is empty string (no password set).  Change if a password was configured.
-COUNTER_PASSWORD    = ''
+COUNTER_PASSWORD    = _cfg('counter', 'password', '')
 
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -432,14 +450,15 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
 
     # ── load chart interaction JS from features/dashboard/ ────────────────────
     # Chart rendering logic lives in a separate file so it can be edited without
-    # touching this function.  The file is embedded verbatim after the data block.
-    _chart_js_path = os.path.join(BASE_DIR, 'features', 'dashboard', 'chart_interactions.js')
+    # touching this function. LOCAL uses chart_interactions_local.js with extended features.
+    _chart_js_filename = 'chart_interactions_local.js' if local else 'chart_interactions.js'
+    _chart_js_path = os.path.join(BASE_DIR, 'features', 'dashboard', _chart_js_filename)
     try:
         with open(_chart_js_path) as _jf:
             _chart_js = _jf.read()
     except OSError as _e:
         log(f"WARNING: could not read {_chart_js_path}: {_e} — dashboard JS may be incomplete", 'WARN')
-        _chart_js = '// chart_interactions.js not found'
+        _chart_js = f'// {_chart_js_filename} not found'
 
     # ── read CSV ──────────────────────────────────────────────────────────────
     rows = []
@@ -816,7 +835,8 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     ]
     if local:
         _ranges += [(20160, 'Last 14 days'), (43200, 'Last 30 days'),
-                    (129600, 'Last 90 days'), (0, 'All data')]
+                    (129600, 'Last 90 days'), (0, 'All data'),
+                    (-1, 'Custom...')]  # Custom range option for local only
     range_options_html = ''.join(
         f'<option value="{v}"{" selected" if v == 1440 else ""}>{lab}</option>'
         for v, lab in _ranges)
@@ -836,6 +856,52 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         '  <div id="chart-pm" style="height:300px"></div>\n'
         '</div>'
     ) if local else ''
+
+    # Custom time range modal (local only)
+    custom_range_modal_html = '''
+    <!-- Custom Time Range Modal (LOCAL ONLY) -->
+    <div id="custom-range-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+         background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
+      <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px;
+           padding:24px 28px; max-width:400px; box-shadow:0 8px 24px rgba(0,0,0,0.5);">
+        <h3 style="margin:0 0 16px; color:var(--text-primary); font-size:18px;">Custom Time Range</h3>
+        <div style="margin-bottom:16px;">
+          <label style="display:block; margin-bottom:6px; color:var(--text-secondary); font-size:13px;">
+            Show last:
+          </label>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input type="number" id="custom-range-value" min="1" max="365" value="3"
+                   style="flex:1; padding:8px 12px; background:var(--bg-primary); border:1px solid var(--border-color);
+                   border-radius:5px; color:var(--text-primary); font-size:14px;" />
+            <select id="custom-range-unit"
+                    style="flex:1; padding:8px 12px; background:var(--bg-primary); border:1px solid var(--border-color);
+                    border-radius:5px; color:var(--text-primary); font-size:14px;">
+              <option value="60">minutes</option>
+              <option value="3600">hours</option>
+              <option value="86400" selected>days</option>
+            </select>
+          </div>
+          <div style="margin-top:8px; color:var(--text-secondary); font-size:12px; font-style:italic;">
+            Example: "3 days" or "12 hours"
+          </div>
+        </div>
+        <div id="custom-range-error" style="display:none; color:#f87171; font-size:13px; margin-bottom:12px;">
+        </div>
+        <div style="display:flex; gap:10px; justify-content:flex-end;">
+          <button id="custom-range-cancel"
+                  style="padding:8px 16px; background:var(--bg-card-alt); border:1px solid var(--border-color);
+                  border-radius:5px; color:var(--text-primary); cursor:pointer; font-size:14px;">
+            Cancel
+          </button>
+          <button id="custom-range-apply"
+                  style="padding:8px 16px; background:#0969da; border:1px solid #0969da;
+                  border-radius:5px; color:#ffffff; cursor:pointer; font-size:14px; font-weight:500;">
+            Apply
+          </button>
+        </div>
+      </div>
+    </div>
+    ''' if local else ''
 
     # ── ISO 14644-1:2015 classification ───────────────────────────────────────
     # Keyed by (class, size_um) → max cumulative particles/m³.
@@ -1397,6 +1463,8 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
 </style>
 </head>
 <body{body_cls}>
+
+{custom_range_modal_html}
 
 <div class="header">
   <div class="header-text">

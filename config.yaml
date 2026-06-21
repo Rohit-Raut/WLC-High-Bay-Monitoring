@@ -1,0 +1,43 @@
+# WLC High Bay Monitoring - Configuration Example
+# Copy this file to config.local.yaml and customize for your installation
+
+counter:
+  ip: '10.66.66.68'
+  port: 502
+  password: ''  # Admin password for RTC sync (empty if not set)
+
+paths:
+  # Project data directory (for permanent archive storage)
+  # Falls back to repo data/ dir if this path doesn't exist
+  project_data_dir: '/project/dune/slow_control/particle_plus'
+
+sampling:
+  sample_time_s: 60      # Sample integration time (seconds)
+  hold_time_s: 0         # Pause between samples (0 = continuous)
+  delay_time_s: 5        # Pump stabilization delay
+  cycles: 0              # 1 sample per cycle then hold
+
+sync:
+  erase_after_sync: false    # Auto-erase after successful sync
+  min_records_to_sync: 1     # Minimum records before syncing
+  trim_cap: 20000            # Auto-erase when counter exceeds this many records
+
+github:
+  enabled: true
+  repo_dir: null             # null = use BASE_DIR (repo root)
+  branch: 'main'
+  remote: 'origin'
+  push_interval_s: 300       # Push every 5 minutes (0 = after every sample)
+
+thresholds:
+  # Display thresholds for dashboard (different from email alert thresholds)
+  temp_low_f: 32
+  temp_high_f: 110
+  rh_low_pct: 30
+  rh_high_pct: 70
+  env_warn_margin: 5         # Orange warning within this margin of limits
+
+metadata:
+  institution: 'Yale University'
+  location: 'Wright Lab DUNE High Bay'
+  dashboard_title: 'DUNE CRP Assembly Site'
