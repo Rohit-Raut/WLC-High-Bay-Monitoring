@@ -1905,7 +1905,7 @@ def mode_sync(client=None):
                     f"last timestamp ({archive_last_ts.strftime('%Y-%m-%d %H:%M:%S')})", 'ERROR')
                 log(f"This suggests counter has stale data or was manually reset.", 'ERROR')
                 log(f"Refusing to save {len(records)} stale records to prevent data corruption.", 'ERROR')
-                log(f"Recommended action: Erase counter manually with force_erase.py", 'ERROR')
+                log(f"Recommended action: Erase counter manually with misc/force_erase.py", 'ERROR')
                 return False
 
         # ── save to archive (never trimmed) ──────────────────────────────────
@@ -1995,7 +1995,7 @@ def mode_trim():
       • counter_state.json-based last-synced tracking
       • post-erase counter-reset detection
       • auto-erase when total > TRIM_CAP
-    trim_counter.py is kept as a standalone emergency tool only.
+    misc/trim_counter.py is kept as a standalone emergency tool only.
     """
     log(f"MODE: --trim  (cap={TRIM_CAP})")
     return mode_sync()

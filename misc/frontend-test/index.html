@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WLC Slow Control — Design Previews</title>
+<style>
+  :root{
+    --bg-primary:#0d1117; --bg-card:#161b22; --bg-card-alt:#1c2128;
+    --border-color:#30363d; --text-primary:#e6edf3; --text-secondary:#8b949e;
+    --accent-yale:#00356b; --accent-yale-light:#286dc0;
+    --status-ok:#3fb950; --status-warn:#db6d28; --status-fault:#f85149; --status-info:#58a6ff;
+  }
+  [data-theme="light"]{
+    --bg-primary:#f6f8fa; --bg-card:#fff; --bg-card-alt:#f0f3f6;
+    --border-color:#d0d7de; --text-primary:#1f2328; --text-secondary:#656d76;
+    --status-ok:#1a7f37; --status-warn:#bc4c00; --status-fault:#cf222e; --status-info:#0969da;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,"Helvetica Neue",Helvetica,sans-serif;background:var(--bg-primary);
+       color:var(--text-primary);min-height:100vh;padding:0 0 60px}
+  header{background:var(--accent-yale);color:#fff;padding:22px 32px;display:flex;
+         align-items:center;justify-content:space-between;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+  header h1{font-size:18px;font-weight:700;letter-spacing:.3px}
+  header .sub{font-size:12px;opacity:.8;margin-top:3px;font-weight:400}
+  .badge{display:inline-block;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.3);
+         border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;letter-spacing:1px;margin-left:10px;vertical-align:middle}
+  .theme-btn{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff;
+             border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer;font-family:inherit}
+  .theme-btn:hover{background:rgba(255,255,255,.22)}
+  .wrap{max-width:1080px;margin:40px auto 0;padding:0 32px}
+  .intro{font-size:14px;color:var(--text-secondary);line-height:1.6;margin-bottom:34px;max-width:760px}
+  .intro b{color:var(--text-primary)}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--bg-card);border:1px solid var(--border-color);border-radius:12px;
+        overflow:hidden;text-decoration:none;color:inherit;display:flex;flex-direction:column;
+        transition:transform .15s,border-color .15s,box-shadow .15s}
+  .card:hover{transform:translateY(-4px);border-color:var(--accent-yale-light);
+              box-shadow:0 12px 30px rgba(0,0,0,.35)}
+  .thumb{height:150px;position:relative;border-bottom:1px solid var(--border-color);overflow:hidden}
+  .card-body{padding:18px 20px 22px}
+  .tag{font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--accent-yale-light);text-transform:uppercase}
+  .card h2{font-size:17px;margin:7px 0 8px}
+  .card p{font-size:12.5px;color:var(--text-secondary);line-height:1.55}
+  .pill{display:inline-block;margin-top:14px;font-size:11px;font-weight:700;color:var(--status-ok)}
+  .meta{margin-top:46px;padding-top:22px;border-top:1px solid var(--border-color);
+        font-size:12px;color:var(--text-secondary);line-height:1.7}
+  .meta code{background:var(--bg-card-alt);padding:1px 6px;border-radius:4px;font-family:inherit;color:var(--text-primary)}
+  /* thumbnails */
+  .t-bar{position:absolute;top:0;left:0;right:0;height:20px;background:var(--accent-yale)}
+  .t-row{position:absolute;left:10px;right:10px;display:flex;gap:6px}
+  .t-cell{flex:1;height:22px;border-radius:3px;background:var(--bg-card-alt);border:1px solid var(--border-color)}
+  .t-cell.iso{background:rgba(63,185,80,.18);border-color:var(--status-ok)}
+  .t-chart{position:absolute;left:10px;right:10px;background:var(--bg-card-alt);border:1px solid var(--border-color);border-radius:4px}
+  .dot{width:7px;height:7px;border-radius:50%;position:absolute}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>WLC Slow Control <span class="badge">DESIGN PREVIEW</span></h1>
+    <div class="sub">Three layout concepts for the local dashboard · DUNE High Bay clean room</div>
+  </div>
+  <button class="theme-btn" onclick="toggleTheme()">◐ Theme</button>
+</header>
+
+<div class="wrap">
+  <p class="intro">
+    Three ways to evolve the local slow-control dashboard, all built in your existing house style
+    (<b>Yale Blue header, Wong colorblind-safe traces, Arial, red/orange/green status</b>). Each adds the
+    <b>5 distributed temp/humidity sensors</b> and a <b>login/lock</b>. Toggle light/dark on each page.
+    These are <b>mockups with synthetic data</b> — no real readings, nothing connected.
+  </p>
+
+  <div class="grid">
+    <a class="card" href="format-a.html">
+      <div class="thumb">
+        <div class="t-bar"></div>
+        <div class="t-row" style="top:30px"><div class="t-cell"></div><div class="t-cell"></div><div class="t-cell iso"></div><div class="t-cell"></div><div class="t-cell"></div><div class="t-cell"></div></div>
+        <div class="t-chart" style="top:62px;height:34px"></div>
+        <div class="t-chart" style="top:104px;height:34px"></div>
+      </div>
+      <div class="card-body">
+        <span class="tag">Format A</span>
+        <h2>Minimal-Change Evolution</h2>
+        <p>Your dashboard, untouched — same 6-card row and chart stack. The single env chart becomes
+           two overlaid 5-sensor charts with status chips. Lock chip added to the header.</p>
+        <span class="pill">● Adoptable tomorrow</span>
+      </div>
+    </a>
+
+    <a class="card" href="format-b.html">
+      <div class="thumb">
+        <div class="t-bar"></div>
+        <div class="t-row" style="top:30px"><div class="t-cell iso" style="flex:0 0 46px"></div><div class="t-cell"></div><div class="t-cell"></div></div>
+        <div class="t-chart" style="top:62px;height:76px;left:10px;width:120px"></div>
+        <div style="position:absolute;top:62px;left:140px;right:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <div class="t-chart" style="position:relative;height:34px"></div><div class="t-chart" style="position:relative;height:34px"></div>
+          <div class="t-chart" style="position:relative;height:34px"></div><div class="t-chart" style="position:relative;height:34px"></div>
+        </div>
+      </div>
+      <div class="card-body">
+        <span class="tag">Format B</span>
+        <h2>Overview + Drill-Down</h2>
+        <p>Room state up top, then a tidy 5-panel small-multiples grid. Click any sensor to expand its
+           full history. Sectioned (Cleanliness / Environment / Health) with a Coldbox system switch.</p>
+        <span class="pill" style="color:var(--accent-yale-light)">● Recommended balance</span>
+      </div>
+    </a>
+
+    <a class="card" href="format-c.html">
+      <div class="thumb">
+        <div class="t-bar"></div>
+        <div class="t-chart" style="top:30px;bottom:12px;left:10px;width:150px;height:auto"></div>
+        <span class="dot" style="background:var(--status-ok);top:54px;left:40px"></span>
+        <span class="dot" style="background:var(--status-ok);top:78px;left:96px"></span>
+        <span class="dot" style="background:var(--status-warn);top:104px;left:60px"></span>
+        <span class="dot" style="background:var(--status-fault);top:120px;left:120px"></span>
+        <span class="dot" style="background:var(--status-ok);top:62px;left:130px"></span>
+        <div class="t-chart" style="top:30px;right:10px;width:80px;height:46px"></div>
+        <div class="t-chart" style="top:84px;right:10px;width:80px;height:44px"></div>
+      </div>
+      <div class="card-body">
+        <span class="tag">Format C</span>
+        <h2>Spatial-First (CERN-style)</h2>
+        <p>A floor-plan of the High Bay is the centerpiece — sensors are status-colored markers you click
+           to read. Cleanliness panels around it, plus a reserved controls rail for future HV.</p>
+        <span class="pill" style="color:var(--status-warn)">● Most ambitious</span>
+      </div>
+    </a>
+  </div>
+
+  <div class="meta">
+    Files live in <code>frontend-test/</code>. Open any one in a browser, or start a tiny server:
+    <code>python3 -m http.server 5700 -d frontend-test</code> then visit <code>localhost:5700</code>.<br>
+    Source of truth for intent: <code>SLOW_CONTROL_DESIGN_BRIEF.md</code>. No production code was changed.
+  </div>
+</div>
+
+<script>
+  function toggleTheme(){
+    const h=document.documentElement;
+    h.setAttribute('data-theme', h.getAttribute('data-theme')==='dark'?'light':'dark');
+  }
+</script>
+</body>
+</html>

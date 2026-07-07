@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Format B — Overview + Drill-Down</title>
+<style>
+  :root{
+    --bg-primary:#0d1117; --bg-card:#161b22; --bg-card-alt:#1c2128;
+    --border-color:#30363d; --text-primary:#e6edf3; --text-secondary:#8b949e; --text-accent:#58a6ff;
+    --accent-yale:#00356b; --accent-yale-light:#286dc0;
+    --status-ok:#3fb950; --status-warn:#db6d28; --status-fault:#f85149; --status-info:#58a6ff;
+    --plot-bg:#0d1117; --plot-grid:#21262d; --card-shadow:0 1px 3px rgba(0,0,0,.4);
+    --w1:#0072B2; --w2:#D55E00; --w3:#009E73; --w4:#CC79A7; --w5:#56B4E9;
+  }
+  [data-theme="light"]{
+    --bg-primary:#f6f8fa; --bg-card:#fff; --bg-card-alt:#f0f3f6;
+    --border-color:#d0d7de; --text-primary:#1f2328; --text-secondary:#656d76; --text-accent:#0969da;
+    --status-ok:#1a7f37; --status-warn:#bc4c00; --status-fault:#cf222e; --status-info:#0969da;
+    --plot-bg:#fff; --plot-grid:#e8ecf0; --card-shadow:0 1px 3px rgba(0,0,0,.08),0 0 0 1px rgba(0,0,0,.04);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,"Helvetica Neue",Helvetica,sans-serif;background:var(--bg-primary);
+       color:var(--text-primary);font-size:13px;padding-bottom:50px}
+  .header{background:var(--accent-yale);color:#fff;padding:10px 18px;display:flex;
+          align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  .htitle h1{font-size:16px;font-weight:700;display:flex;align-items:center;gap:9px}
+  .htitle .sub{font-size:11px;opacity:.82;margin-top:2px}
+  .badge{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.32);border-radius:4px;
+         padding:1px 7px;font-size:9px;font-weight:700;letter-spacing:1px}
+  .controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .ctl,.controls select{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);
+         color:#fff;border-radius:5px;padding:5px 9px;font-size:11px;font-family:inherit;cursor:pointer}
+  .controls select option{color:#111}
+  .gen{font-size:10px;opacity:.78}
+  .alerts-chip{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.1);
+         border:1px solid rgba(255,255,255,.25);border-radius:5px;padding:5px 9px;font-size:11px}
+  .alerts-chip .adot{width:8px;height:8px;border-radius:50%;background:var(--status-warn);box-shadow:0 0 6px var(--status-warn)}
+  .lock-chip{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.1);
+         border:1px solid rgba(255,255,255,.3);border-radius:5px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600}
+  .lock-chip:hover{background:rgba(255,255,255,.2)}
+  .lock-chip.unlocked{border-color:var(--status-ok);color:#bbf7c8}
+  /* system tabs */
+  .systembar{background:var(--bg-card-alt);border-bottom:1px solid var(--border-color);
+             padding:0 18px;display:flex;gap:4px;align-items:center}
+  .systab{padding:9px 16px;font-size:12px;font-weight:600;color:var(--text-secondary);cursor:pointer;
+          border-bottom:2px solid transparent}
+  .systab.active{color:var(--text-primary);border-bottom-color:var(--accent-yale-light)}
+  .systab.disabled{opacity:.45;cursor:not-allowed}
+  .systab .mini{font-size:9px;background:var(--bg-card);border:1px solid var(--border-color);
+                border-radius:4px;padding:1px 5px;margin-left:6px;color:var(--text-secondary)}
+  .page{padding:14px 18px;max-width:1500px;margin:0 auto}
+  .u{text-transform:none}
+  .section{margin-top:20px}
+  .section-head{display:flex;align-items:center;gap:10px;margin:0 2px 10px}
+  .section-head h2{font-size:12px;font-weight:700;letter-spacing:1.4px;color:var(--text-secondary);text-transform:uppercase}
+  .section-head .line{flex:1;height:1px;background:var(--border-color)}
+  .section-head .meta{font-size:11px;color:var(--text-secondary)}
+  /* overview top */
+  .overview{display:grid;grid-template-columns:auto 1fr 280px;gap:12px;align-items:stretch}
+  @media(max-width:1100px){.overview{grid-template-columns:1fr}}
+  .iso-hero{background:var(--bg-card);border:1px solid var(--border-color);border-radius:11px;
+            padding:18px 26px;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:var(--card-shadow)}
+  .iso-hero .lbl{font-size:10px;letter-spacing:1.4px;color:var(--text-secondary);text-transform:uppercase}
+  .iso-hero .big{font-size:46px;font-weight:800;color:var(--status-ok);text-shadow:0 0 22px rgba(63,185,80,.45);line-height:1.1}
+  .iso-hero .sub{font-size:11px;color:var(--text-secondary)}
+  .minicards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .mc{background:var(--bg-card);border:1px solid var(--border-color);border-radius:10px;padding:11px 13px;position:relative;overflow:hidden;box-shadow:var(--card-shadow)}
+  .mc::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--status-ok)}
+  .mc.warn::before{background:var(--status-warn)}
+  .mc .lbl{font-size:9.5px;letter-spacing:.8px;color:var(--text-secondary);text-transform:uppercase}
+  .mc .val{font-size:20px;font-weight:700;margin-top:5px}
+  .mc.warn .val{color:var(--status-warn)} .mc .val .un{font-size:10px;color:var(--text-secondary);font-weight:400}
+  .mc .sp{margin-top:6px}
+  /* alarm list */
+  .alarms{background:var(--bg-card);border:1px solid var(--border-color);border-radius:11px;padding:12px 14px;box-shadow:var(--card-shadow)}
+  .alarms h3{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text-secondary);margin-bottom:9px}
+  .alarm{display:flex;gap:9px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--border-color);font-size:11.5px}
+  .alarm:first-of-type{border-top:none}
+  .alarm .ad{width:8px;height:8px;border-radius:50%;margin-top:4px;flex:none}
+  .alarm .t{font-size:10px;color:var(--text-secondary);margin-top:2px}
+  /* small multiples grid */
+  .smgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  @media(max-width:1200px){.smgrid{grid-template-columns:repeat(3,1fr)}}
+  @media(max-width:760px){.smgrid{grid-template-columns:repeat(2,1fr)}}
+  .sm{background:var(--bg-card);border:1px solid var(--border-color);border-radius:10px;padding:11px 12px 8px;
+      cursor:pointer;transition:border-color .15s,transform .15s;box-shadow:var(--card-shadow)}
+  .sm:hover{border-color:var(--accent-yale-light);transform:translateY(-3px)}
+  .sm.offline{opacity:.6}
+  .sm .top{display:flex;align-items:center;justify-content:space-between}
+  .sm .nm{font-size:11.5px;font-weight:700;display:flex;align-items:center;gap:6px}
+  .sm .nm .sw{width:9px;height:9px;border-radius:2px}
+  .sm .st{width:8px;height:8px;border-radius:50%}
+  .sm .reads{display:flex;gap:14px;margin:8px 0 4px}
+  .sm .reads .r .n{font-size:17px;font-weight:700}
+  .sm .reads .r .n .un{font-size:9.5px;color:var(--text-secondary);font-weight:400}
+  .sm .reads .r .k{font-size:8.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--text-secondary)}
+  .sm .expand{font-size:9.5px;color:var(--text-accent);margin-top:5px}
+  .panel{background:var(--bg-card);border:1px solid var(--border-color);border-radius:10px;padding:12px 14px 8px;box-shadow:var(--card-shadow)}
+  .panel .ptitle{font-size:11px;font-weight:700;letter-spacing:.7px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:6px}
+  .grid2{display:grid;grid-template-columns:2fr 1fr;gap:12px}
+  @media(max-width:900px){.grid2{grid-template-columns:1fr}}
+  svg.chart{width:100%;display:block}
+  /* drawer */
+  .drawer-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:90}
+  .drawer-bg.show{display:block}
+  .drawer{position:fixed;top:0;right:0;bottom:0;width:560px;max-width:94vw;background:var(--bg-primary);
+          border-left:1px solid var(--border-color);box-shadow:-12px 0 40px rgba(0,0,0,.45);
+          transform:translateX(100%);transition:transform .25s;z-index:91;padding:18px 20px;overflow:auto}
+  .drawer.show{transform:translateX(0)}
+  .drawer .dh{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+  .drawer .dh h3{font-size:18px;display:flex;align-items:center;gap:9px}
+  .drawer .dh .sw{width:12px;height:12px;border-radius:3px}
+  .drawer .loc{font-size:11.5px;color:var(--text-secondary);margin-bottom:14px}
+  .drawer .x{background:var(--bg-card-alt);border:1px solid var(--border-color);color:var(--text-primary);
+             border-radius:6px;width:30px;height:30px;cursor:pointer;font-size:15px}
+  .bigreads{display:flex;gap:24px;margin-bottom:14px}
+  .bigreads .b .n{font-size:30px;font-weight:800}
+  .bigreads .b .n .un{font-size:13px;color:var(--text-secondary);font-weight:400}
+  .bigreads .b .k{font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--text-secondary)}
+  /* modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;justify-content:center;z-index:120;backdrop-filter:blur(2px)}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--bg-card);border:1px solid var(--border-color);border-radius:12px;padding:26px 28px;width:340px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .modal h3{font-size:16px;margin-bottom:4px} .modal p{font-size:12px;color:var(--text-secondary);margin-bottom:16px;line-height:1.5}
+  .modal input{width:100%;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:7px;padding:10px 12px;font-size:13px;font-family:inherit}
+  .modal input:focus{outline:none;border-color:var(--accent-yale-light)}
+  .modal .err{color:var(--status-fault);font-size:11px;margin-top:8px;display:none}
+  .modal .row{display:flex;gap:9px;margin-top:16px}
+  .btn{flex:1;border:none;border-radius:7px;padding:10px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit}
+  .btn-pri{background:var(--accent-yale-light);color:#fff} .btn-sec{background:var(--bg-card-alt);color:var(--text-primary);border:1px solid var(--border-color)}
+  .note{font-size:11px;color:var(--text-secondary);background:var(--bg-card-alt);border:1px dashed var(--border-color);border-radius:8px;padding:9px 13px;margin-top:6px;line-height:1.5}
+  .note b{color:var(--text-accent)}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="htitle">
+    <h1>DUNE CRP Assembly Site — Slow Control <span class="badge">LOCAL</span></h1>
+    <div class="sub">Particulate &amp; Environmental Monitor · Particles Plus 7301</div>
+  </div>
+  <div class="controls">
+    <select><option>Last 24 hr</option><option>Last 7 days</option><option>All data</option></select>
+    <select><option>10 min</option><option>Raw</option><option>60 min</option></select>
+    <span class="ctl">⟳</span>
+    <span class="gen">Generated: 2026-06-29 15:42</span>
+    <span class="alerts-chip"><span class="adot"></span>ALERTS 1</span>
+    <span class="lock-chip" id="lockChip" onclick="openLogin()"><span class="li">🔒</span><span id="lockTxt">Locked</span></span>
+    <span class="ctl" onclick="toggleTheme()">◐ Light</span>
+  </div>
+</div>
+
+<!-- system switch (future Coldbox) -->
+<div class="systembar">
+  <div class="systab active">High Bay</div>
+  <div class="systab disabled" title="Future expansion">Coldbox <span class="mini">soon</span></div>
+  <div class="systab disabled" title="Future expansion">HV Controls <span class="mini">soon</span></div>
+</div>
+
+<div class="page">
+  <p class="note"><b>Format B — Overview + Drill-Down.</b> A true situational-awareness layout: room state at the
+  top, then a 5-panel small-multiples grid for the sensors. <b>Click any sensor panel</b> to open its full history
+  in a side drawer. The greyed <b>Coldbox / HV Controls</b> tabs above show how future systems slot in. Synthetic data.</p>
+
+  <!-- OVERVIEW -->
+  <div class="section">
+    <div class="section-head"><h2>Room state — is everything OK right now?</h2><div class="line"></div><div class="meta">last sample 15:40:32</div></div>
+    <div class="overview">
+      <div class="iso-hero">
+        <div class="lbl">ISO 14644-1</div>
+        <div class="big">ISO 6</div>
+        <div class="sub">worst-case across channels</div>
+      </div>
+      <div class="minicards">
+        <div class="mc"><div class="lbl">≥0.5 <span class="u">µm</span></div><div class="val">706<span class="un"> /m³</span></div><div class="sp" id="sp1"></div></div>
+        <div class="mc"><div class="lbl">≥0.3 <span class="u">µm</span></div><div class="val">14,126<span class="un"> /m³</span></div><div class="sp" id="sp2"></div></div>
+        <div class="mc"><div class="lbl">Temp mean</div><div class="val">71.6<span class="un"> °F</span></div><div class="sp" id="sp3"></div></div>
+        <div class="mc warn"><div class="lbl">Humidity</div><div class="val">50<span class="un"> %</span></div><div class="sp" id="sp4"></div></div>
+      </div>
+      <div class="alarms">
+        <h3>Active alarms &amp; events</h3>
+        <div class="alarm"><span class="ad" style="background:var(--status-warn)"></span><div><div>Airlock RH 67% — nearing 70% limit</div><div class="t">15:38 · warning</div></div></div>
+        <div class="alarm"><span class="ad" style="background:var(--status-fault)"></span><div><div>Storage (S5) sensor offline</div><div class="t">15:26 · 14 min ago</div></div></div>
+        <div class="alarm"><span class="ad" style="background:var(--status-info)"></span><div><div>Clock synced to host (NTP)</div><div class="t">15:10 · info</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ENVIRONMENT small multiples -->
+  <div class="section">
+    <div class="section-head"><h2>Environment — 5 distributed sensors</h2><div class="line"></div><div class="meta">click a panel for full history</div></div>
+    <div class="smgrid" id="smgrid"></div>
+  </div>
+
+  <!-- CLEANLINESS -->
+  <div class="section">
+    <div class="section-head"><h2>Cleanliness — particle concentration</h2><div class="line"></div></div>
+    <div class="grid2">
+      <div class="panel"><div class="ptitle">Concentration over time — 6 channels (log /m³)</div><div id="c-counts"></div></div>
+      <div class="panel"><div class="ptitle">Latest counts by size (log)</div><div id="c-dist"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- DRAWER -->
+<div class="drawer-bg" id="drawerBg" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <div class="dh"><h3 id="dName"><span class="sw" id="dSw"></span>Sensor</h3><button class="x" onclick="closeDrawer()">✕</button></div>
+  <div class="loc" id="dLoc"></div>
+  <div class="bigreads">
+    <div class="b"><div class="k">Temperature</div><div class="n" id="dTemp">—<span class="un"> °F</span></div></div>
+    <div class="b"><div class="k">Humidity</div><div class="n" id="dRh">—<span class="un"> %</span></div></div>
+    <div class="b"><div class="k">Status</div><div class="n" id="dStat" style="font-size:18px">—</div></div>
+  </div>
+  <div class="panel" style="margin-bottom:12px"><div class="ptitle">Temperature history (°F)</div><div id="dChartT"></div></div>
+  <div class="panel"><div class="ptitle">Humidity history (%)</div><div id="dChartR"></div></div>
+</div>
+
+<!-- LOGIN -->
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <h3>🔒 Dashboard locked</h3>
+    <p>Viewing is open. Enter the shared lab password to unlock interactive controls and future equipment actions.</p>
+    <input type="password" id="pw" placeholder="Shared password" onkeydown="if(event.key==='Enter')submitLogin()">
+    <div class="err" id="err">Incorrect password.</div>
+    <div class="row"><button class="btn btn-sec" onclick="closeLogin()">Cancel</button><button class="btn btn-pri" onclick="submitLogin()">Unlock</button></div>
+  </div>
+</div>
+
+<script>
+function toggleTheme(){const h=document.documentElement;h.setAttribute('data-theme',h.getAttribute('data-theme')==='dark'?'light':'dark');}
+function openLogin(){document.getElementById('modal').classList.add('show');document.getElementById('pw').focus();}
+function closeLogin(){document.getElementById('modal').classList.remove('show');document.getElementById('err').style.display='none';}
+function submitLogin(){const v=document.getElementById('pw').value;if(!v){document.getElementById('err').textContent='Enter a password.';document.getElementById('err').style.display='block';return;}
+  const c=document.getElementById('lockChip');c.classList.add('unlocked');c.querySelector('.li').textContent='🔓';document.getElementById('lockTxt').textContent='Unlocked';closeLogin();}
+
+const SENSORS=[
+  {name:'North Bay',loc:'NW corner, near entry',hex:'#0072B2',temp:70.2,rh:44,status:'live'},
+  {name:'South Bay',loc:'SE wall, by exhaust',hex:'#D55E00',temp:71.8,rh:46,status:'live'},
+  {name:'CRP Assembly',loc:'Central assembly table',hex:'#009E73',temp:72.4,rh:43,status:'live'},
+  {name:'Airlock',loc:'Personnel airlock',hex:'#CC79A7',temp:73.5,rh:67,status:'warn'},
+  {name:'Storage (S5)',loc:'Component storage rack',hex:'#56B4E9',temp:null,rh:null,status:'offline'},
+];
+function rng(s){return()=>{s=(s*9301+49297)%233280;return s/233280;};}
+function series(base,amp,n,seed){const r=rng(seed),o=[];for(let i=0;i<n;i++)o.push(base+Math.sin(i/6+seed)*amp+(r()-.5)*amp*0.8);return o;}
+
+function lineChart(elId,opts){
+  const W=1000,H=opts.h||200,P={l:opts.l??46,r:opts.r||12,t:8,b:opts.b||20},pw=W-P.l-P.r,ph=H-P.t-P.b;
+  const{yMin,yMax,n}=opts,yToPx=v=>P.t+ph-(v-yMin)/(yMax-yMin)*ph,xToPx=i=>P.l+(n<=1?0:i/(n-1)*pw);
+  let g='';
+  if(opts.band){const y1=yToPx(Math.min(opts.band[1],yMax)),y0=yToPx(Math.max(opts.band[0],yMin));
+    g+=`<rect x="${P.l}" y="${y1}" width="${pw}" height="${y0-y1}" fill="var(--status-ok)" opacity="0.06"/>`;}
+  const ticks=opts.ticks||3;
+  for(let t=0;t<=ticks;t++){const val=yMin+(yMax-yMin)*t/ticks,y=yToPx(val);
+    g+=`<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="var(--plot-grid)"/>`;
+    if(!opts.noY)g+=`<text x="${P.l-6}" y="${y+3}" text-anchor="end" font-size="10" fill="var(--text-secondary)">${opts.fmt?opts.fmt(val):val.toFixed(0)}</text>`;}
+  (opts.series||[]).forEach(s=>{let d='';s.data.forEach((v,i)=>{d+=(i?'L':'M')+xToPx(i).toFixed(1)+' '+yToPx(v).toFixed(1)+' ';});
+    g+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w||1.8}" opacity="${s.op||.95}" stroke-linejoin="round"/>`;
+    if(s.last!=null)g+=`<circle cx="${xToPx(s.data.length-1)}" cy="${yToPx(s.data[s.data.length-1])}" r="3" fill="${s.color}"/>`;});
+  document.getElementById(elId).innerHTML=`<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">${g}</svg>`;
+}
+function spark(elId,data,color){
+  const W=200,H=30,min=Math.min(...data),max=Math.max(...data),pad=(max-min)*.2||1;
+  const y=v=>H-2-(v-(min-pad))/((max+pad)-(min-pad))*(H-4),x=i=>i/(data.length-1)*W;
+  let d='';data.forEach((v,i)=>d+=(i?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)+' ');
+  document.getElementById(elId).innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:26px"><path d="${d}" fill="none" stroke="${color}" stroke-width="2"/></svg>`;
+}
+function barChart(elId,vals,labels,colors){
+  const W=1000,H=200,P={l:46,r:12,t:8,b:26},pw=W-P.l-P.r,ph=H-P.t-P.b,max=Math.max(...vals),bw=pw/vals.length*.55,gap=pw/vals.length;
+  let g='';for(let t=0;t<=3;t++){const y=P.t+ph-ph*t/3;g+=`<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="var(--plot-grid)"/>`;}
+  vals.forEach((v,i)=>{const h=v/max*ph,x=P.l+gap*i+(gap-bw)/2,y=P.t+ph-h;
+    g+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="2" fill="${colors[i]}"/><text x="${x+bw/2}" y="${H-9}" text-anchor="middle" font-size="10" fill="var(--text-secondary)">${labels[i]}</text>`;});
+  document.getElementById(elId).innerHTML=`<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">${g}</svg>`;
+}
+
+const N=48,chanCols=['#0072B2','#D55E00','#009E73','#CC79A7','#56B4E9','#E69F00'];
+// overview sparklines
+spark('sp1',series(700,120,30,2),'#0072B2');spark('sp2',series(14000,2000,30,3),'#D55E00');
+spark('sp3',series(71.6,1,30,4),'#009E73');spark('sp4',series(50,8,30,5),'var(--status-warn)');
+
+// small multiples
+const grid=document.getElementById('smgrid');
+SENSORS.forEach((s,idx)=>{
+  const stColor=s.status==='live'?'var(--status-ok)':s.status==='warn'?'var(--status-warn)':'var(--status-fault)';
+  const off=s.status==='offline';
+  const el=document.createElement('div');el.className='sm'+(off?' offline':'');el.onclick=()=>openDrawer(idx);
+  el.innerHTML=`<div class="top"><div class="nm"><span class="sw" style="background:${s.hex}"></span>${s.name}</div><span class="st" style="background:${stColor}"></span></div>
+    ${off?`<div style="font-size:11px;color:var(--text-secondary);margin:12px 0 6px">Offline · last seen 14 min ago</div>`:
+    `<div class="reads"><div class="r"><div class="k">Temp</div><div class="n">${s.temp.toFixed(1)}<span class="un"> °F</span></div></div>
+       <div class="r"><div class="k">RH</div><div class="n">${s.rh}<span class="un"> %</span></div></div></div>`}
+    <div id="sm${idx}"></div><div class="expand">↗ full history</div>`;
+  grid.appendChild(el);
+  if(!off)lineChart('sm'+idx,{h:70,l:6,r:6,b:6,noY:true,ticks:2,n:30,yMin:s.temp-3,yMax:s.temp+3,
+    series:[{data:series(s.temp,.7,30,30+idx),color:s.hex,w:1.6}]});
+  else document.getElementById('sm'+idx).innerHTML='<div style="height:70px;border:1px dashed var(--border-color);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text-secondary)">no signal</div>';
+});
+
+// cleanliness charts
+lineChart('c-counts',{h:260,n:N,yMin:0,yMax:6,ticks:6,fmt:v=>['1','10','100','1k','10k','100k','1M'][Math.round(v)],
+  series:[0,1,2,3,4,5].map(i=>({data:series(3.6-i*0.6,0.4,N,2+i*4),color:chanCols[i],last:1}))});
+barChart('c-dist',[58,12,3,2,3,1],['≥0.5','≥0.3','≥1.0','≥2.5','≥5.0','≥10'],chanCols);
+
+// drawer
+function openDrawer(i){
+  const s=SENSORS[i];document.getElementById('drawerBg').classList.add('show');document.getElementById('drawer').classList.add('show');
+  document.getElementById('dName').innerHTML=`<span class="sw" style="background:${s.hex}"></span>${s.name}`;
+  document.getElementById('dLoc').textContent=s.loc;
+  const off=s.status==='offline';
+  document.getElementById('dTemp').innerHTML=off?'—<span class="un"> °F</span>':`${s.temp.toFixed(1)}<span class="un"> °F</span>`;
+  document.getElementById('dRh').innerHTML=off?'—<span class="un"> %</span>':`${s.rh}<span class="un"> %</span>`;
+  const st=document.getElementById('dStat');
+  st.textContent=off?'OFFLINE':s.status==='warn'?'NEARING LIMIT':'LIVE';
+  st.style.color=off?'var(--status-fault)':s.status==='warn'?'var(--status-warn)':'var(--status-ok)';
+  if(!off){
+    lineChart('dChartT',{h:170,n:N,yMin:s.temp-4,yMax:s.temp+4,ticks:4,band:[68,75],series:[{data:series(s.temp,.8,N,30+i),color:s.hex,last:1}]});
+    lineChart('dChartR',{h:170,n:N,yMin:Math.max(0,s.rh-12),yMax:s.rh+12,ticks:4,band:[30,70],series:[{data:series(s.rh,1.6,N,60+i),color:s.hex,last:1}]});
+  }else{['dChartT','dChartR'].forEach(id=>document.getElementById(id).innerHTML='<div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:12px">Sensor offline — no recent data</div>');}
+}
+function closeDrawer(){document.getElementById('drawerBg').classList.remove('show');document.getElementById('drawer').classList.remove('show');}
+</script>
+</body>
+</html>

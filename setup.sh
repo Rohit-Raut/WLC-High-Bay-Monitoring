@@ -277,7 +277,7 @@ else
     echo "     • Accessible from this machine"
     echo ""
     echo "2. Test connectivity:"
-    echo -e "   ${YELLOW}python3 test.py${NC}"
+    echo -e "   ${YELLOW}python3 misc/test.py${NC}"
     echo ""
     echo "3. Once connected, start monitoring:"
     echo -e "   ${YELLOW}python3 particle_plus.py --all${NC}"

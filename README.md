@@ -288,13 +288,21 @@ python3 particle_plus.py --stop        Gracefully stop a running --all instance.
 ```
 WLC-High-Bay-Monitoring/
 ├── particle_plus.py          Main logger, Modbus interface, and dashboard generator
-├── flush_and_erase.py        Standalone utility: sync all records then optionally erase
-├── test.py                   Quick Modbus connectivity and register read test
+├── local_serve.py            Localhost server for the full-history local dashboard (SSH tunnel)
+├── network_serve.py          Same as local_serve.py but binds to the network interface
+├── dev_serve.py              Dev server: rebuilds index.html from JS + data, serves locally
+├── setup.sh                  Interactive installer for new hosts
 ├── requirements.txt          Python dependencies
-├── index.html                Auto-generated dashboard (served by GitHub Pages)
+├── index.html                Auto-generated public dashboard (served by GitHub Pages)
+├── index_local.html          Auto-generated local dashboard (full history)
+├── features/                 Feature modules (dashboard JS, alerts, data manager,
+│                             temp_humidity_sensor/ — Shelly H&T MQTT logger + sensors.yaml)
+├── misc/                     One-off utilities & archives: erase/trim/check tools, test.py
+│                             (Modbus connectivity test), old dashboard snapshot, design mockups
 └── data/
-    ├── measurements.csv      Historical sample records (appended after each sync)
-    └── live.csv              Live readings at 10-second resolution (last 24 hr)
+    ├── measurement_archive.csv  All synced records ever (local only)
+    ├── live.csv              30-day rolling window of synced records
+    └── env_live.csv          10-second temp/RH snapshots (30 days)
 ```
 
 Runtime files created on the host (not tracked by git):

@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Format C — Spatial-First (CERN-style)</title>
+<style>
+  :root{
+    --bg-primary:#0d1117; --bg-card:#161b22; --bg-card-alt:#1c2128;
+    --border-color:#30363d; --text-primary:#e6edf3; --text-secondary:#8b949e; --text-accent:#58a6ff;
+    --accent-yale:#00356b; --accent-yale-light:#286dc0;
+    --status-ok:#3fb950; --status-warn:#db6d28; --status-fault:#f85149; --status-info:#58a6ff;
+    --plot-bg:#0d1117; --plot-grid:#21262d; --card-shadow:0 1px 3px rgba(0,0,0,.4);
+    --w1:#0072B2; --w2:#D55E00; --w3:#009E73; --w4:#CC79A7; --w5:#56B4E9;
+    --floor:#11161d; --floor-line:#2a3340;
+  }
+  [data-theme="light"]{
+    --bg-primary:#f6f8fa; --bg-card:#fff; --bg-card-alt:#f0f3f6;
+    --border-color:#d0d7de; --text-primary:#1f2328; --text-secondary:#656d76; --text-accent:#0969da;
+    --status-ok:#1a7f37; --status-warn:#bc4c00; --status-fault:#cf222e; --status-info:#0969da;
+    --plot-bg:#fff; --plot-grid:#e8ecf0; --card-shadow:0 1px 3px rgba(0,0,0,.08),0 0 0 1px rgba(0,0,0,.04);
+    --floor:#eef2f6; --floor-line:#cdd6e0;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,"Helvetica Neue",Helvetica,sans-serif;background:var(--bg-primary);color:var(--text-primary);font-size:13px;padding-bottom:40px}
+  .header{background:var(--accent-yale);color:#fff;padding:10px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  .htitle h1{font-size:16px;font-weight:700;display:flex;align-items:center;gap:9px}
+  .htitle .sub{font-size:11px;opacity:.82;margin-top:2px}
+  .badge{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.32);border-radius:4px;padding:1px 7px;font-size:9px;font-weight:700;letter-spacing:1px}
+  .controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .ctl,.controls select{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:5px;padding:5px 9px;font-size:11px;font-family:inherit;cursor:pointer}
+  .controls select option{color:#111}
+  .gen{font-size:10px;opacity:.78}
+  .lock-chip{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.3);border-radius:5px;padding:5px 10px;font-size:11px;cursor:pointer;font-weight:600}
+  .lock-chip:hover{background:rgba(255,255,255,.2)} .lock-chip.unlocked{border-color:var(--status-ok);color:#bbf7c8}
+  .systembar{background:var(--bg-card-alt);border-bottom:1px solid var(--border-color);padding:0 18px;display:flex;gap:4px}
+  .systab{padding:9px 16px;font-size:12px;font-weight:600;color:var(--text-secondary);cursor:pointer;border-bottom:2px solid transparent}
+  .systab.active{color:var(--text-primary);border-bottom-color:var(--accent-yale-light)}
+  .systab.disabled{opacity:.45;cursor:not-allowed}
+  .systab .mini{font-size:9px;background:var(--bg-card);border:1px solid var(--border-color);border-radius:4px;padding:1px 5px;margin-left:6px}
+  .u{text-transform:none}
+  .note{font-size:11px;color:var(--text-secondary);background:var(--bg-card-alt);border:1px dashed var(--border-color);border-radius:8px;padding:9px 13px;margin:12px 18px 0;line-height:1.5}
+  .note b{color:var(--text-accent)}
+  /* main 3-col: map | detail | controls rail */
+  .layout{display:grid;grid-template-columns:1.6fr 360px 70px;gap:14px;padding:14px 18px;max-width:1600px;margin:0 auto;align-items:start}
+  @media(max-width:1200px){.layout{grid-template-columns:1fr}}
+  .panel{background:var(--bg-card);border:1px solid var(--border-color);border-radius:11px;padding:13px 15px;box-shadow:var(--card-shadow)}
+  .ptitle{font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+  .ptitle .iso{font-weight:800;font-size:14px;color:var(--status-ok)}
+  /* map */
+  .mapwrap{position:relative;width:100%;border-radius:8px;overflow:hidden;background:var(--floor)}
+  svg.floor{width:100%;display:block}
+  .marker{cursor:pointer}
+  .marker circle.hit{fill:transparent}
+  .mlabel{font-size:11px;fill:var(--text-primary);font-weight:600}
+  .mread{font-size:10px;fill:var(--text-secondary)}
+  .pulse{animation:pulse 2.4s ease-out infinite}
+  @keyframes pulse{0%{r:9;opacity:.55}70%{r:20;opacity:0}100%{opacity:0}}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:11px;font-size:11px;color:var(--text-secondary)}
+  .legend .d{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
+  /* detail card */
+  .detail .dname{font-size:17px;font-weight:700;display:flex;align-items:center;gap:9px}
+  .detail .dname .sw{width:12px;height:12px;border-radius:3px}
+  .detail .dloc{font-size:11px;color:var(--text-secondary);margin:3px 0 12px}
+  .bigreads{display:flex;gap:22px;margin-bottom:12px}
+  .bigreads .b .n{font-size:26px;font-weight:800}
+  .bigreads .b .n .un{font-size:12px;color:var(--text-secondary);font-weight:400}
+  .bigreads .b .k{font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--text-secondary)}
+  .statpill{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.5px;padding:3px 9px;border-radius:20px;margin-bottom:12px}
+  svg.chart{width:100%;display:block}
+  .minilabel{font-size:9.5px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.7px;margin:10px 0 4px}
+  /* controls rail (future HV) */
+  .rail{display:flex;flex-direction:column;gap:10px;align-items:center}
+  .railbtn{width:54px;height:54px;border-radius:12px;background:var(--bg-card);border:1px solid var(--border-color);
+           display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:8.5px;color:var(--text-secondary);cursor:not-allowed;opacity:.6}
+  .railbtn .ic{font-size:18px}
+  .railbtn.estop{border-color:var(--status-fault);color:var(--status-fault);opacity:.85}
+  .railcap{writing-mode:vertical-rl;font-size:8.5px;letter-spacing:1.5px;color:var(--text-secondary);text-transform:uppercase;margin-top:4px}
+  /* bottom cleanliness row */
+  .bottom{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding:0 18px;max-width:1600px;margin:0 auto}
+  @media(max-width:900px){.bottom{grid-template-columns:1fr}}
+  .cards-inline{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  .ci{flex:1;min-width:90px;background:var(--bg-card-alt);border:1px solid var(--border-color);border-radius:8px;padding:9px 11px}
+  .ci .lbl{font-size:9px;letter-spacing:.7px;text-transform:uppercase;color:var(--text-secondary)}
+  .ci .v{font-size:18px;font-weight:700;margin-top:3px}
+  /* modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;justify-content:center;z-index:120;backdrop-filter:blur(2px)}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--bg-card);border:1px solid var(--border-color);border-radius:12px;padding:26px 28px;width:340px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .modal h3{font-size:16px;margin-bottom:4px} .modal p{font-size:12px;color:var(--text-secondary);margin-bottom:16px;line-height:1.5}
+  .modal input{width:100%;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:7px;padding:10px 12px;font-size:13px;font-family:inherit}
+  .modal input:focus{outline:none;border-color:var(--accent-yale-light)}
+  .modal .err{color:var(--status-fault);font-size:11px;margin-top:8px;display:none}
+  .modal .row{display:flex;gap:9px;margin-top:16px}
+  .btn{flex:1;border:none;border-radius:7px;padding:10px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit}
+  .btn-pri{background:var(--accent-yale-light);color:#fff} .btn-sec{background:var(--bg-card-alt);color:var(--text-primary);border:1px solid var(--border-color)}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="htitle">
+    <h1>DUNE CRP Assembly Site — Slow Control <span class="badge">LOCAL</span></h1>
+    <div class="sub">Spatial environmental view · Particles Plus 7301</div>
+  </div>
+  <div class="controls">
+    <select><option>Last 24 hr</option><option>Last 7 days</option></select>
+    <span class="ctl">⟳</span>
+    <span class="gen">Generated: 2026-06-29 15:42</span>
+    <span class="lock-chip" id="lockChip" onclick="openLogin()"><span class="li">🔒</span><span id="lockTxt">Locked</span></span>
+    <span class="ctl" onclick="toggleTheme()">◐ Light</span>
+  </div>
+</div>
+<div class="systembar">
+  <div class="systab active">High Bay</div>
+  <div class="systab disabled" title="Future expansion">Coldbox <span class="mini">soon</span></div>
+</div>
+
+<p class="note"><b>Format C — Spatial-First.</b> The High Bay floor plan is the centerpiece (the CERN-style idea):
+each sensor is a status-colored marker — <b>hover</b> for a tooltip, <b>click</b> to read it in the panel at right.
+The vertical <b>rail on the far right</b> is a reserved, disabled placeholder for future HV controls + emergency stop
+(local version only). Synthetic data; floor plan is a schematic placeholder.</p>
+
+<div class="layout">
+  <!-- MAP -->
+  <div class="panel">
+    <div class="ptitle"><span>High Bay — sensor map</span><span>4 live · 1 offline</span></div>
+    <div class="mapwrap">
+      <svg class="floor" viewBox="0 0 600 360" id="floor"></svg>
+    </div>
+    <div class="legend">
+      <span><span class="d" style="background:var(--status-ok)"></span>In band</span>
+      <span><span class="d" style="background:var(--status-warn)"></span>Nearing limit</span>
+      <span><span class="d" style="background:var(--status-fault)"></span>Fault</span>
+      <span><span class="d" style="background:transparent;border:1px solid var(--text-secondary)"></span>Offline</span>
+    </div>
+  </div>
+
+  <!-- DETAIL -->
+  <div class="panel detail">
+    <div class="dname" id="dName"><span class="sw" id="dSw"></span>CRP Assembly</div>
+    <div class="dloc" id="dLoc">Central assembly table</div>
+    <span class="statpill" id="dPill">LIVE</span>
+    <div class="bigreads">
+      <div class="b"><div class="k">Temperature</div><div class="n" id="dTemp">72.4<span class="un"> °F</span></div></div>
+      <div class="b"><div class="k">Humidity</div><div class="n" id="dRh">43<span class="un"> %</span></div></div>
+    </div>
+    <div class="minilabel">Temperature history (°F)</div>
+    <div id="dChartT"></div>
+    <div class="minilabel">Humidity history (%)</div>
+    <div id="dChartR"></div>
+    <div class="minilabel">Last seen</div>
+    <div style="font-size:12px" id="dSeen">15:40:32 · 22 s ago</div>
+  </div>
+
+  <!-- CONTROLS RAIL (future) -->
+  <div class="rail">
+    <div class="railbtn"><span class="ic">⚡</span>HV</div>
+    <div class="railbtn"><span class="ic">▤</span>Pump</div>
+    <div class="railbtn"><span class="ic">⚙</span>Set</div>
+    <div class="railbtn estop"><span class="ic">⏻</span>E-STOP</div>
+    <div class="railcap">controls · soon</div>
+  </div>
+</div>
+
+<!-- BOTTOM cleanliness -->
+<div class="bottom">
+  <div class="panel">
+    <div class="ptitle"><span>Cleanliness</span><span class="iso">ISO 6</span></div>
+    <div class="cards-inline">
+      <div class="ci"><div class="lbl">≥0.5 <span class="u">µm</span></div><div class="v">706<span style="font-size:10px;color:var(--text-secondary)"> /m³</span></div></div>
+      <div class="ci"><div class="lbl">≥0.3 <span class="u">µm</span></div><div class="v">14,126</div></div>
+      <div class="ci"><div class="lbl">Flow</div><div class="v" style="color:var(--status-ok)">0.10</div></div>
+    </div>
+    <div id="c-counts"></div>
+  </div>
+  <div class="panel">
+    <div class="ptitle">Latest counts by size (log)</div>
+    <div id="c-dist"></div>
+  </div>
+  <div class="panel">
+    <div class="ptitle">Environment summary</div>
+    <div id="env-summary"></div>
+  </div>
+</div>
+
+<!-- LOGIN -->
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <h3>🔒 Dashboard locked</h3>
+    <p>Viewing is open. Enter the shared lab password to unlock interactive controls (and future HV actions on this local view).</p>
+    <input type="password" id="pw" placeholder="Shared password" onkeydown="if(event.key==='Enter')submitLogin()">
+    <div class="err" id="err">Incorrect password.</div>
+    <div class="row"><button class="btn btn-sec" onclick="closeLogin()">Cancel</button><button class="btn btn-pri" onclick="submitLogin()">Unlock</button></div>
+  </div>
+</div>
+
+<script>
+function toggleTheme(){const h=document.documentElement;h.setAttribute('data-theme',h.getAttribute('data-theme')==='dark'?'light':'dark');}
+function openLogin(){document.getElementById('modal').classList.add('show');document.getElementById('pw').focus();}
+function closeLogin(){document.getElementById('modal').classList.remove('show');document.getElementById('err').style.display='none';}
+function submitLogin(){const v=document.getElementById('pw').value;if(!v){document.getElementById('err').textContent='Enter a password.';document.getElementById('err').style.display='block';return;}
+  const c=document.getElementById('lockChip');c.classList.add('unlocked');c.querySelector('.li').textContent='🔓';document.getElementById('lockTxt').textContent='Unlocked';closeLogin();}
+
+// sensors with floor positions (in 600x360 viewBox)
+const SENSORS=[
+  {name:'North Bay',loc:'NW corner, near entry',hex:'#0072B2',temp:70.2,rh:44,status:'live',x:120,y:90},
+  {name:'South Bay',loc:'SE wall, by exhaust',hex:'#D55E00',temp:71.8,rh:46,status:'live',x:470,y:270},
+  {name:'CRP Assembly',loc:'Central assembly table',hex:'#009E73',temp:72.4,rh:43,status:'live',x:300,y:185},
+  {name:'Airlock',loc:'Personnel airlock',hex:'#CC79A7',temp:73.5,rh:67,status:'warn',x:155,y:290},
+  {name:'Storage (S5)',loc:'Component storage rack',hex:'#56B4E9',temp:null,rh:null,status:'offline',x:480,y:95},
+];
+const stColor=s=>s.status==='live'?'var(--status-ok)':s.status==='warn'?'var(--status-warn)':'var(--status-fault)';
+function rng(s){return()=>{s=(s*9301+49297)%233280;return s/233280;};}
+function series(base,amp,n,seed){const r=rng(seed),o=[];for(let i=0;i<n;i++)o.push(base+Math.sin(i/6+seed)*amp+(r()-.5)*amp*0.8);return o;}
+
+/* floor plan */
+function drawFloor(){
+  let g=`
+   <rect x="30" y="30" width="540" height="300" rx="6" fill="var(--floor)" stroke="var(--floor-line)" stroke-width="2"/>
+   <!-- assembly zone -->
+   <rect x="230" y="135" width="140" height="100" rx="4" fill="none" stroke="var(--floor-line)" stroke-dasharray="5 4"/>
+   <text x="300" y="128" text-anchor="middle" font-size="10" fill="var(--text-secondary)">CRP ASSEMBLY TABLE</text>
+   <!-- airlock -->
+   <rect x="110" y="262" width="95" height="58" rx="3" fill="none" stroke="var(--floor-line)"/>
+   <text x="157" y="256" text-anchor="middle" font-size="9" fill="var(--text-secondary)">AIRLOCK</text>
+   <!-- storage racks -->
+   <rect x="440" y="60" width="90" height="55" rx="3" fill="none" stroke="var(--floor-line)"/>
+   <text x="485" y="54" text-anchor="middle" font-size="9" fill="var(--text-secondary)">STORAGE</text>
+   <!-- exhaust -->
+   <line x1="430" y1="300" x2="540" y2="300" stroke="var(--floor-line)" stroke-width="4"/>
+   <text x="485" y="318" text-anchor="middle" font-size="8.5" fill="var(--text-secondary)">EXHAUST</text>
+   <text x="46" y="48" font-size="9" fill="var(--text-secondary)">ENTRY ▸</text>`;
+  SENSORS.forEach((s,i)=>{
+    const c=stColor(s),off=s.status==='offline';
+    g+=`<g class="marker" onclick="select(${i})">`;
+    if(!off)g+=`<circle cx="${s.x}" cy="${s.y}" r="9" fill="${c}" class="pulse" opacity="0.5"/>`;
+    g+=`<circle cx="${s.x}" cy="${s.y}" r="8" fill="${off?'var(--floor)':c}" stroke="${off?'var(--text-secondary)':'#fff'}" stroke-width="${off?1.5:2}"/>`;
+    g+=`<circle class="hit" cx="${s.x}" cy="${s.y}" r="22"/>`;
+    const lx=s.x>300?s.x-12:s.x+14, anc=s.x>300?'end':'start';
+    g+=`<text class="mlabel" x="${lx}" y="${s.y-2}" text-anchor="${anc}">${s.name}</text>`;
+    g+=`<text class="mread" x="${lx}" y="${s.y+11}" text-anchor="${anc}">${off?'offline':s.temp.toFixed(1)+'°F · '+s.rh+'%'}</text>`;
+    g+=`</g>`;
+  });
+  document.getElementById('floor').innerHTML=g;
+}
+
+function lineChart(elId,opts){
+  const W=1000,H=opts.h||150,P={l:opts.l??42,r:opts.r||12,t:8,b:opts.b||20},pw=W-P.l-P.r,ph=H-P.t-P.b;
+  const{yMin,yMax,n}=opts,yToPx=v=>P.t+ph-(v-yMin)/(yMax-yMin)*ph,xToPx=i=>P.l+(n<=1?0:i/(n-1)*pw);
+  let g='';
+  if(opts.band){const y1=yToPx(Math.min(opts.band[1],yMax)),y0=yToPx(Math.max(opts.band[0],yMin));g+=`<rect x="${P.l}" y="${y1}" width="${pw}" height="${y0-y1}" fill="var(--status-ok)" opacity="0.06"/>`;}
+  const ticks=opts.ticks||3;
+  for(let t=0;t<=ticks;t++){const val=yMin+(yMax-yMin)*t/ticks,y=yToPx(val);g+=`<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="var(--plot-grid)"/>`;
+    if(!opts.noY)g+=`<text x="${P.l-6}" y="${y+3}" text-anchor="end" font-size="10" fill="var(--text-secondary)">${opts.fmt?opts.fmt(val):val.toFixed(0)}</text>`;}
+  (opts.series||[]).forEach(s=>{let d='';s.data.forEach((v,i)=>{d+=(i?'L':'M')+xToPx(i).toFixed(1)+' '+yToPx(v).toFixed(1)+' ';});
+    g+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w||1.8}" opacity="${s.op||.95}" stroke-linejoin="round"/>`;
+    if(s.last!=null)g+=`<circle cx="${xToPx(s.data.length-1)}" cy="${yToPx(s.data[s.data.length-1])}" r="3" fill="${s.color}"/>`;});
+  document.getElementById(elId).innerHTML=`<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">${g}</svg>`;
+}
+function barChart(elId,vals,labels,colors){
+  const W=1000,H=200,P={l:42,r:12,t:8,b:26},pw=W-P.l-P.r,ph=H-P.t-P.b,max=Math.max(...vals),bw=pw/vals.length*.55,gap=pw/vals.length;
+  let g='';for(let t=0;t<=3;t++){const y=P.t+ph-ph*t/3;g+=`<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="var(--plot-grid)"/>`;}
+  vals.forEach((v,i)=>{const h=v/max*ph,x=P.l+gap*i+(gap-bw)/2,y=P.t+ph-h;g+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="2" fill="${colors[i]}"/><text x="${x+bw/2}" y="${H-9}" text-anchor="middle" font-size="10" fill="var(--text-secondary)">${labels[i]}</text>`;});
+  document.getElementById(elId).innerHTML=`<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">${g}</svg>`;
+}
+
+const N=48,chanCols=['#0072B2','#D55E00','#009E73','#CC79A7','#56B4E9','#E69F00'];
+drawFloor();
+function select(i){
+  const s=SENSORS[i],off=s.status==='offline';
+  document.getElementById('dName').innerHTML=`<span class="sw" style="background:${s.hex}"></span>${s.name}`;
+  document.getElementById('dLoc').textContent=s.loc;
+  const pill=document.getElementById('dPill');
+  pill.textContent=off?'OFFLINE':s.status==='warn'?'NEARING LIMIT':'LIVE';
+  const c=off?'var(--status-fault)':s.status==='warn'?'var(--status-warn)':'var(--status-ok)';
+  pill.style.color=c;pill.style.background='color-mix(in srgb,'+'transparent 82%, '+c+')';
+  pill.style.border='1px solid '+c;
+  document.getElementById('dTemp').innerHTML=off?'—<span class="un"> °F</span>':`${s.temp.toFixed(1)}<span class="un"> °F</span>`;
+  document.getElementById('dRh').innerHTML=off?'—<span class="un"> %</span>':`${s.rh}<span class="un"> %</span>`;
+  document.getElementById('dSeen').textContent=off?'15:26:05 · 14 min ago':'15:40:32 · 22 s ago';
+  if(!off){
+    lineChart('dChartT',{h:130,n:N,yMin:s.temp-4,yMax:s.temp+4,ticks:3,band:[68,75],series:[{data:series(s.temp,.8,N,30+i),color:s.hex,last:1}]});
+    lineChart('dChartR',{h:130,n:N,yMin:Math.max(0,s.rh-12),yMax:s.rh+12,ticks:3,band:[30,70],series:[{data:series(s.rh,1.6,N,60+i),color:s.hex,last:1}]});
+  }else{['dChartT','dChartR'].forEach(id=>document.getElementById(id).innerHTML='<div style="height:90px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:11px">No recent data</div>');}
+}
+select(2);
+
+// bottom charts
+lineChart('c-counts',{h:200,n:N,yMin:0,yMax:6,ticks:6,fmt:v=>['1','10','100','1k','10k','100k','1M'][Math.round(v)],
+  series:[0,1,2,3,4,5].map(i=>({data:series(3.6-i*0.6,0.4,N,2+i*4),color:chanCols[i],last:1}))});
+barChart('c-dist',[58,12,3,2,3,1],['≥0.5','≥0.3','≥1.0','≥2.5','≥5.0','≥10'],chanCols);
+// env summary: overlaid temp lines of live sensors
+lineChart('env-summary',{h:200,n:N,yMin:66,yMax:78,ticks:4,band:[68,75],
+  series:SENSORS.filter(s=>s.status!=='offline').map((s,i)=>({data:series(s.temp,.7,N,30+i),color:s.hex,last:1}))});
+</script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+# sensors.yaml — Shelly H&T sensor configuration for shelly_ht_logger.py.
+# Copy this file to sensors.yaml (same directory as the script) and edit.
+#
+# `prefix` = the device's MQTT topic prefix (Shelly app → Settings → Networks
+# → MQTT). Default is the device id, e.g. shellyhtg3-d885ac14bad4.
+# `label`  = the Location written to the csv for that sensor's rows.
+
+# broker.hivemq.com is the PUBLIC test broker — fine for bring-up, but anyone
+# on the internet can read (and spoof) the topics. For production, run a local
+# mosquitto on noether and repoint the Shellys + this broker setting.
+broker: broker.hivemq.com
+port: 1883
+username: null           # set both if the broker requires auth
+password: null
+
+# single combined csv all sensors append to
+output_csv: /project/dune/slow_control/temp_humidity/temp_humidity.csv
+
+sensors:
+  ht-1:
+    prefix: shellyhtg3-REPLACE_ME_1
+    label: "Location 1"
+  ht-2:
+    prefix: shellyhtg3-REPLACE_ME_2
+    label: "Location 2"
+  ht-3:
+    prefix: shellyhtg3-REPLACE_ME_3
+    label: "Location 3"
+  ht-4:
+    prefix: shellyhtg3-REPLACE_ME_4
+    label: "Location 4"
+  ht-5:
+    prefix: shellyhtg3-REPLACE_ME_5
+    label: "Location 5"
