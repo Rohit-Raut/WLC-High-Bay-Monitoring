@@ -26,7 +26,7 @@ features/alerts/alerts_secrets.py
 
 # Local configuration — user-specific settings, not tracked
 config.local.yaml
-features/temp_humidity_sensor/sensors.yaml
+#features/temp_humidity_sensor/sensors.yaml
 
 # Local working notes — the ONE ongoing-work file (all other md files besides
 # README.md were removed 2026-07-07); keep local only, don't publish
