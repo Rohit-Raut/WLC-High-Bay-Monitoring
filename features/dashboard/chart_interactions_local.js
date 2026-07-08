@@ -209,10 +209,15 @@ function envTimeSpan(mins) {
     if (s.ts.length) { firsts.push(s.ts[0]); lasts.push(s.ts[s.ts.length - 1]); }
   });
   if (!lasts.length) return null;
-  const right = lasts.reduce((a, b) => _parseDate(a) > _parseDate(b) ? a : b);
-  const left  = mins
-    ? _toLocalStr(new Date(_parseDate(right).getTime() - mins * 60000))
-    : firsts.reduce((a, b) => _parseDate(a) < _parseDate(b) ? a : b);
+  const right    = lasts.reduce((a, b) => _parseDate(a) > _parseDate(b) ? a : b);
+  const earliest = firsts.reduce((a, b) => _parseDate(a) < _parseDate(b) ? a : b);
+  // clamp the window's left edge to where env data actually begins — a 7-day
+  // window over 8 h of sensor history would otherwise be mostly empty space
+  const left = mins
+    ? _toLocalStr(new Date(Math.max(
+        _parseDate(right).getTime() - mins * 60000,
+        _parseDate(earliest).getTime())))
+    : earliest;
   return { left: left, right: right };
 }
 
@@ -324,7 +329,7 @@ function renderEnvCards() {
   box.innerHTML = envStatuses().map(function (x) {
     const tv = x.t !== null ? x.t.toFixed(1) : '—';
     const hv = x.h !== null ? x.h.toFixed(0) : '—';
-    return '<div class="env-card' + (x.stale ? ' dead' : '') + '" data-site="' + x.site.name +
+    return '<div class="env-card" data-site="' + x.site.name +
       '" role="button" tabindex="0" aria-label="' + x.site.name + ' detail">' +
       '<div class="env-card-head"><span class="env-dot" style="background:' +
         _traceColor(x.color) + '"></span>' +
@@ -385,15 +390,16 @@ function renderEnvCohort(mins, DARK) {
       line: { color: col, width: wT * 0.85 } });
   });
   return Plotly.react('chart-env', traces, Object.assign({}, DARK, {
-    margin: { l: 60, r: 70, t: 26, b: 46 },
+    margin: { l: 48, r: 58, t: 26, b: 46 },
     showlegend: false,
     xaxis:  Object.assign({}, DARK.xaxis, { title: '' },
                           span ? { maxallowed: span.right } : {}, envRange),
     yaxis:  Object.assign({}, DARK.yaxis, {
-      title: 'Temperature (°C)', fixedrange: true }),
+      title: { text: 'Temperature (°C)', standoff: 6 },
+      nticks: 6, fixedrange: true }),
     yaxis2: Object.assign({}, DARK.yaxis, {
-      title: { text: 'Humidity (%)', standoff: 15 },
-      overlaying: 'y', side: 'right', fixedrange: true, showgrid: false }),
+      title: { text: 'Humidity (%)', standoff: 8 },
+      nticks: 6, overlaying: 'y', side: 'right', fixedrange: true, showgrid: false }),
   }), PLOTLY_CFG).then(function (gd) {
     // first cohort render turns #chart-env into a Plotly plot — attach the
     // modebar +/- zoom interceptor now (idempotent for the other charts)
@@ -455,12 +461,12 @@ function renderEnv(mins, DARK) {
   if (bCohort) bCohort.addEventListener('click', function () { _setEnvView('cohort'); });
   cards.addEventListener('click', function (e) {
     const c = e.target.closest('.env-card');
-    if (c && !c.classList.contains('dead')) _setEnvView('cohort', c.dataset.site);
+    if (c) _setEnvView('cohort', c.dataset.site);
   });
   cards.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const c = e.target.closest('.env-card');
-    if (c && !c.classList.contains('dead')) { e.preventDefault(); _setEnvView('cohort', c.dataset.site); }
+    if (c) { e.preventDefault(); _setEnvView('cohort', c.dataset.site); }
   });
   if (chips) chips.addEventListener('click', function (e) {
     const c = e.target.closest('.env-chip');

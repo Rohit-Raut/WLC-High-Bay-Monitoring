@@ -1561,7 +1561,6 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     transition: border-color .15s; }}
   .env-card:hover, .env-card:focus-visible {{ border-color: var(--accent-yale-light);
     outline: none; }}
-  .env-card.dead {{ opacity: .55; cursor: default; }}
   .env-card-head {{ display: flex; align-items: center; gap: 7px; }}
   .env-dot {{ width: 9px; height: 9px; border-radius: 50%; flex: none; }}
   .env-card-name {{ font-size: 12.5px; font-weight: 700; flex: 1;
