@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>Temp &amp; Humidity — Multi-Sensor Design Preview</title>
+<script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+<style>
+  :root{
+    --bg-primary:#0d1117; --bg-card:#161b22; --bg-card-alt:#1c2128;
+    --border-color:#30363d; --text-primary:#e6edf3; --text-secondary:#8b949e;
+    --accent-yale:#00356b; --accent-yale-light:#286dc0;
+    --status-ok:#3fb950; --status-warn:#db6d28; --status-fault:#f85149;
+  }
+  [data-theme="light"]{
+    --bg-primary:#f6f8fa; --bg-card:#ffffff; --bg-card-alt:#f0f3f6;
+    --border-color:#d0d7de; --text-primary:#1f2328; --text-secondary:#656d76;
+    --status-ok:#1a7f37; --status-warn:#bc4c00; --status-fault:#cf222e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,"Helvetica Neue",Helvetica,sans-serif;
+       background:var(--bg-primary);color:var(--text-primary);min-height:100vh}
+
+  /* ── header ── */
+  header{background:var(--accent-yale);color:#fff;padding:12px 20px;
+         display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{font-size:15px;font-weight:700;letter-spacing:.2px}
+  .badge{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.32);
+         border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;letter-spacing:1px}
+  header .spacer{flex:1}
+  .seg{display:flex;border:1px solid rgba(255,255,255,.3);border-radius:6px;overflow:hidden}
+  .seg button{background:transparent;border:0;color:#fff;font-family:inherit;font-size:12px;
+         padding:7px 14px;cursor:pointer;border-right:1px solid rgba(255,255,255,.2)}
+  .seg button:last-child{border-right:0}
+  .seg button.active{background:rgba(255,255,255,.24);font-weight:700}
+  .hbtn{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff;
+        border-radius:6px;padding:7px 12px;font-size:12px;cursor:pointer;font-family:inherit}
+  .hbtn:hover{background:rgba(255,255,255,.22)}
+
+  /* ── layout: chart area + collapsible readings panel ── */
+  .wrap{display:flex;align-items:stretch;gap:0;padding:16px;max-width:1500px;margin:0 auto}
+  .charts{flex:1;min-width:0;display:flex;flex-direction:column;gap:14px}
+  .chart-panel{background:var(--bg-card);border:1px solid var(--border-color);
+        border-radius:8px;padding:12px 14px}
+  .chart-title{font-size:12px;font-weight:700;color:var(--text-secondary);
+        text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+
+  /* readings panel — “pressed open” drawer on the right */
+  .readings{width:252px;flex:none;margin-left:14px;background:var(--bg-card);
+        border:1px solid var(--border-color);border-radius:8px;overflow:hidden;
+        transition:width .25s ease;display:flex;flex-direction:column;align-self:flex-start}
+  .readings.collapsed{width:34px}
+  .r-head{display:flex;align-items:center;gap:8px;padding:10px 10px 10px 12px;
+        border-bottom:1px solid var(--border-color);background:var(--bg-card-alt)}
+  .r-head .t{font-size:11.5px;font-weight:700;letter-spacing:.7px;color:var(--text-secondary);
+        text-transform:uppercase;white-space:nowrap;flex:1}
+  .r-toggle{background:none;border:1px solid var(--border-color);color:var(--text-secondary);
+        border-radius:5px;width:22px;height:22px;cursor:pointer;font-size:11px;line-height:1;
+        font-family:inherit;flex:none}
+  .r-toggle:hover{color:var(--text-primary);border-color:var(--text-secondary)}
+  .readings.collapsed .r-head{border-bottom:0;padding:10px 5px;justify-content:center}
+  .readings.collapsed .t,.readings.collapsed .r-body,.readings.collapsed .r-foot{display:none}
+  .r-body{padding:4px 0}
+  .r-row{display:flex;align-items:flex-start;gap:9px;padding:9px 12px;
+        border-bottom:1px solid var(--border-color)}
+  .r-row:last-child{border-bottom:0}
+  .dot{width:10px;height:10px;border-radius:50%;margin-top:3px;flex:none}
+  .dot.off{background:transparent !important;border:2px solid var(--text-secondary);
+        width:8px;height:8px}
+  .r-name{font-size:12.5px;font-weight:700;line-height:1.25}
+  .r-vals{font-size:12px;color:var(--text-secondary);margin-top:2px}
+  .r-vals b{color:var(--text-primary);font-weight:700}
+  .r-vals .u{font-weight:400}
+  .r-vals b.warn{color:var(--status-warn)}
+  .r-age{font-size:10.5px;color:var(--text-secondary);margin-top:2px;opacity:.85}
+  .r-row.dead .r-name{color:var(--text-secondary)}
+  .r-row.dead .r-vals{opacity:.6}
+  .r-foot{padding:8px 12px;border-top:1px solid var(--border-color);font-size:10.5px;
+        color:var(--text-secondary);background:var(--bg-card-alt)}
+
+  .note{max-width:1500px;margin:0 auto;padding:0 16px 26px;font-size:12px;
+        color:var(--text-secondary);line-height:1.7}
+</style>
+</head>
+<body>
+<header>
+  <h1>Temperature &amp; Humidity — Multi-Sensor</h1>
+  <span class="badge">DESIGN PREVIEW</span>
+  <span class="spacer"></span>
+  <div class="seg" id="variant-seg">
+    <button data-v="A">A · Overlaid dual-axis</button>
+    <button data-v="B" class="active">B · Stacked pair ★</button>
+    <button data-v="C">C · Per-location grid</button>
+  </div>
+  <button class="hbtn" id="btn-theme">Light / Dark</button>
+</header>
+
+<div class="wrap">
+  <div class="charts" id="chart-area"><!-- variant charts injected here --></div>
+
+  <aside class="readings" id="readings">
+    <div class="r-head">
+      <span class="t">Current Readings</span>
+      <button class="r-toggle" id="r-toggle" title="Collapse panel">&#x276F;</button>
+    </div>
+    <div class="r-body" id="r-body"></div>
+    <div class="r-foot" id="r-foot"></div>
+  </aside>
+</div>
+
+<div class="note">
+  Rendered from the real logger output of 2026-07-07 16:39 → 2026-07-08 00:05 (sensors 2–5;
+  Sensor 1 offline). No error bars. One Wong color per location, identical in every view and
+  in the readings panel. RH warning band edge (70&nbsp;%) drawn where relevant — Sensor&nbsp;2 is
+  approaching it, which is why its humidity reads orange in the panel.
+</div>
+
+<!-- ── the real data, verbatim from shelly_ht_logger.py output ────────────── -->
+<script type="text/plain" id="raw-log">
+Time: 2026-07-07 16:39:04, Location: Sensor 2, Temp: 21.0 C, Humidity: 64.9 %
+Time: 2026-07-07 16:39:07, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.6 %
+Time: 2026-07-07 16:39:15, Location: Sensor 2, Temp: 21.0 C, Humidity: 64.9 %
+Time: 2026-07-07 16:41:02, Location: Sensor 4, Temp: 20.7 C, Humidity: 59.1 %
+Time: 2026-07-07 16:44:06, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 16:45:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.7 %
+Time: 2026-07-07 16:45:04, Location: Sensor 2, Temp: 21.4 C, Humidity: 63.6 %
+Time: 2026-07-07 16:47:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 59.3 %
+Time: 2026-07-07 16:50:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.2 %
+Time: 2026-07-07 16:51:01, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.8 %
+Time: 2026-07-07 16:51:07, Location: Sensor 2, Temp: 21.1 C, Humidity: 63.8 %
+Time: 2026-07-07 16:53:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 59.6 %
+Time: 2026-07-07 16:56:07, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 16:57:01, Location: Sensor 2, Temp: 20.9 C, Humidity: 63.7 %
+Time: 2026-07-07 16:57:05, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.9 %
+Time: 2026-07-07 16:59:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.6 %
+Time: 2026-07-07 17:02:10, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 17:03:01, Location: Sensor 2, Temp: 20.9 C, Humidity: 63.5 %
+Time: 2026-07-07 17:03:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.9 %
+Time: 2026-07-07 17:05:07, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.6 %
+Time: 2026-07-07 17:08:04, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 17:09:01, Location: Sensor 2, Temp: 20.9 C, Humidity: 63.7 %
+Time: 2026-07-07 17:09:08, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.9 %
+Time: 2026-07-07 17:11:07, Location: Sensor 4, Temp: 20.7 C, Humidity: 59.3 %
+Time: 2026-07-07 17:14:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 17:15:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.8 %
+Time: 2026-07-07 17:15:08, Location: Sensor 2, Temp: 20.8 C, Humidity: 63.7 %
+Time: 2026-07-07 17:17:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 59.3 %
+Time: 2026-07-07 17:20:02, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.4 %
+Time: 2026-07-07 17:21:01, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.7 %
+Time: 2026-07-07 17:21:02, Location: Sensor 2, Temp: 20.8 C, Humidity: 63.6 %
+Time: 2026-07-07 17:23:09, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.2 %
+Time: 2026-07-07 17:26:08, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 17:27:01, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.7 %
+Time: 2026-07-07 17:27:08, Location: Sensor 2, Temp: 20.8 C, Humidity: 63.8 %
+Time: 2026-07-07 17:29:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 59.3 %
+Time: 2026-07-07 17:32:04, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 17:33:01, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.8 %
+Time: 2026-07-07 17:33:02, Location: Sensor 2, Temp: 20.7 C, Humidity: 63.9 %
+Time: 2026-07-07 17:35:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.3 %
+Time: 2026-07-07 17:38:04, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 17:39:01, Location: Sensor 2, Temp: 20.7 C, Humidity: 64.0 %
+Time: 2026-07-07 17:39:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.8 %
+Time: 2026-07-07 17:41:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.3 %
+Time: 2026-07-07 17:44:08, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 17:45:01, Location: Sensor 2, Temp: 20.6 C, Humidity: 64.0 %
+Time: 2026-07-07 17:45:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.8 %
+Time: 2026-07-07 17:47:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 17:50:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 17:51:01, Location: Sensor 2, Temp: 20.6 C, Humidity: 64.1 %
+Time: 2026-07-07 17:51:01, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.9 %
+Time: 2026-07-07 17:53:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 17:56:02, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 17:57:08, Location: Sensor 5, Temp: 21.4 C, Humidity: 56.0 %
+Time: 2026-07-07 17:57:08, Location: Sensor 2, Temp: 20.6 C, Humidity: 64.2 %
+Time: 2026-07-07 17:59:08, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 18:02:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 18:03:01, Location: Sensor 2, Temp: 20.5 C, Humidity: 64.1 %
+Time: 2026-07-07 18:03:08, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.9 %
+Time: 2026-07-07 18:05:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 18:08:09, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.4 %
+Time: 2026-07-07 18:09:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.8 %
+Time: 2026-07-07 18:09:08, Location: Sensor 2, Temp: 20.5 C, Humidity: 64.3 %
+Time: 2026-07-07 18:11:08, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.3 %
+Time: 2026-07-07 18:14:08, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 18:15:01, Location: Sensor 2, Temp: 20.5 C, Humidity: 64.4 %
+Time: 2026-07-07 18:15:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.8 %
+Time: 2026-07-07 18:17:08, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.2 %
+Time: 2026-07-07 18:20:07, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.2 %
+Time: 2026-07-07 18:21:09, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.8 %
+Time: 2026-07-07 18:21:09, Location: Sensor 2, Temp: 20.5 C, Humidity: 64.5 %
+Time: 2026-07-07 18:23:05, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.2 %
+Time: 2026-07-07 18:26:04, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 18:27:01, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.7 %
+Time: 2026-07-07 18:27:03, Location: Sensor 2, Temp: 20.4 C, Humidity: 64.5 %
+Time: 2026-07-07 18:29:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.1 %
+Time: 2026-07-07 18:32:02, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.2 %
+Time: 2026-07-07 18:33:02, Location: Sensor 2, Temp: 20.4 C, Humidity: 64.5 %
+Time: 2026-07-07 18:33:07, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.7 %
+Time: 2026-07-07 18:35:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.0 %
+Time: 2026-07-07 18:38:02, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 18:39:01, Location: Sensor 2, Temp: 20.4 C, Humidity: 64.6 %
+Time: 2026-07-07 18:39:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.6 %
+Time: 2026-07-07 18:41:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.1 %
+Time: 2026-07-07 18:44:02, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 18:45:01, Location: Sensor 2, Temp: 20.4 C, Humidity: 64.6 %
+Time: 2026-07-07 18:45:01, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.6 %
+Time: 2026-07-07 18:47:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.0 %
+Time: 2026-07-07 18:50:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 18:51:01, Location: Sensor 2, Temp: 20.3 C, Humidity: 64.6 %
+Time: 2026-07-07 18:51:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.6 %
+Time: 2026-07-07 18:53:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.1 %
+Time: 2026-07-07 18:56:03, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 18:57:01, Location: Sensor 2, Temp: 20.3 C, Humidity: 64.9 %
+Time: 2026-07-07 18:57:02, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.7 %
+Time: 2026-07-07 18:59:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.1 %
+Time: 2026-07-07 19:02:04, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 19:03:01, Location: Sensor 2, Temp: 20.3 C, Humidity: 65.0 %
+Time: 2026-07-07 19:03:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.7 %
+Time: 2026-07-07 19:05:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.1 %
+Time: 2026-07-07 19:08:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 19:09:01, Location: Sensor 2, Temp: 20.2 C, Humidity: 65.1 %
+Time: 2026-07-07 19:09:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.8 %
+Time: 2026-07-07 19:11:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.2 %
+Time: 2026-07-07 19:14:02, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.3 %
+Time: 2026-07-07 19:15:01, Location: Sensor 2, Temp: 20.2 C, Humidity: 65.2 %
+Time: 2026-07-07 19:15:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.9 %
+Time: 2026-07-07 19:17:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.2 %
+Time: 2026-07-07 19:20:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.4 %
+Time: 2026-07-07 19:21:02, Location: Sensor 2, Temp: 20.2 C, Humidity: 65.3 %
+Time: 2026-07-07 19:21:02, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.9 %
+Time: 2026-07-07 19:23:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 19:26:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.4 %
+Time: 2026-07-07 19:27:02, Location: Sensor 2, Temp: 20.2 C, Humidity: 65.3 %
+Time: 2026-07-07 19:27:02, Location: Sensor 5, Temp: 21.3 C, Humidity: 56.0 %
+Time: 2026-07-07 19:29:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 19:32:01, Location: Sensor 3, Temp: 21.9 C, Humidity: 53.5 %
+Time: 2026-07-07 19:33:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 56.1 %
+Time: 2026-07-07 19:33:01, Location: Sensor 2, Temp: 20.2 C, Humidity: 65.4 %
+Time: 2026-07-07 19:35:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 19:38:04, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 19:39:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 56.1 %
+Time: 2026-07-07 19:39:01, Location: Sensor 2, Temp: 20.1 C, Humidity: 65.5 %
+Time: 2026-07-07 19:41:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 19:44:04, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 19:45:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 56.1 %
+Time: 2026-07-07 19:45:01, Location: Sensor 2, Temp: 20.1 C, Humidity: 65.6 %
+Time: 2026-07-07 19:47:01, Location: Sensor 4, Temp: 20.5 C, Humidity: 59.4 %
+Time: 2026-07-07 19:50:02, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 19:51:02, Location: Sensor 5, Temp: 21.3 C, Humidity: 56.0 %
+Time: 2026-07-07 19:51:04, Location: Sensor 2, Temp: 20.1 C, Humidity: 65.5 %
+Time: 2026-07-07 19:53:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 19:56:04, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 19:57:02, Location: Sensor 2, Temp: 20.1 C, Humidity: 65.5 %
+Time: 2026-07-07 19:57:02, Location: Sensor 5, Temp: 21.3 C, Humidity: 56.0 %
+Time: 2026-07-07 19:59:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 20:02:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 20:03:01, Location: Sensor 2, Temp: 20.0 C, Humidity: 65.6 %
+Time: 2026-07-07 20:03:02, Location: Sensor 5, Temp: 21.3 C, Humidity: 56.1 %
+Time: 2026-07-07 20:05:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 20:08:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 20:09:02, Location: Sensor 5, Temp: 21.3 C, Humidity: 56.0 %
+Time: 2026-07-07 20:09:02, Location: Sensor 2, Temp: 20.1 C, Humidity: 65.5 %
+Time: 2026-07-07 20:11:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.4 %
+Time: 2026-07-07 20:14:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 20:15:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 56.0 %
+Time: 2026-07-07 20:15:03, Location: Sensor 2, Temp: 20.0 C, Humidity: 65.6 %
+Time: 2026-07-07 20:17:01, Location: Sensor 4, Temp: 20.5 C, Humidity: 59.2 %
+Time: 2026-07-07 20:20:02, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.6 %
+Time: 2026-07-07 20:21:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.9 %
+Time: 2026-07-07 20:21:02, Location: Sensor 2, Temp: 20.0 C, Humidity: 65.8 %
+Time: 2026-07-07 20:23:01, Location: Sensor 4, Temp: 20.5 C, Humidity: 59.2 %
+Time: 2026-07-07 20:26:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 20:27:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.9 %
+Time: 2026-07-07 20:27:03, Location: Sensor 2, Temp: 20.0 C, Humidity: 65.9 %
+Time: 2026-07-07 20:29:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.1 %
+Time: 2026-07-07 20:32:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 20:33:01, Location: Sensor 2, Temp: 20.0 C, Humidity: 66.0 %
+Time: 2026-07-07 20:33:02, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.8 %
+Time: 2026-07-07 20:35:04, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.1 %
+Time: 2026-07-07 20:38:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 20:39:01, Location: Sensor 2, Temp: 20.0 C, Humidity: 66.1 %
+Time: 2026-07-07 20:39:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.7 %
+Time: 2026-07-07 20:41:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.0 %
+Time: 2026-07-07 20:44:02, Location: Sensor 3, Temp: 21.9 C, Humidity: 53.5 %
+Time: 2026-07-07 20:45:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.7 %
+Time: 2026-07-07 20:45:02, Location: Sensor 2, Temp: 20.0 C, Humidity: 66.1 %
+Time: 2026-07-07 20:47:05, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.9 %
+Time: 2026-07-07 20:50:05, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.6 %
+Time: 2026-07-07 20:51:02, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.8 %
+Time: 2026-07-07 20:51:05, Location: Sensor 2, Temp: 20.0 C, Humidity: 66.3 %
+Time: 2026-07-07 20:53:04, Location: Sensor 4, Temp: 20.5 C, Humidity: 59.0 %
+Time: 2026-07-07 20:56:06, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.6 %
+Time: 2026-07-07 20:57:01, Location: Sensor 2, Temp: 20.0 C, Humidity: 66.4 %
+Time: 2026-07-07 20:57:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.7 %
+Time: 2026-07-07 20:59:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 59.0 %
+Time: 2026-07-07 21:02:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 21:03:01, Location: Sensor 5, Temp: 21.3 C, Humidity: 55.7 %
+Time: 2026-07-07 21:03:06, Location: Sensor 2, Temp: 20.0 C, Humidity: 66.4 %
+Time: 2026-07-07 21:05:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.9 %
+Time: 2026-07-07 21:08:01, Location: Sensor 3, Temp: 21.9 C, Humidity: 53.5 %
+Time: 2026-07-07 21:09:06, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.6 %
+Time: 2026-07-07 21:09:07, Location: Sensor 2, Temp: 20.0 C, Humidity: 66.4 %
+Time: 2026-07-07 21:11:06, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.8 %
+Time: 2026-07-07 21:14:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 21:15:01, Location: Sensor 2, Temp: 20.0 C, Humidity: 66.6 %
+Time: 2026-07-07 21:15:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.6 %
+Time: 2026-07-07 21:17:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.8 %
+Time: 2026-07-07 21:20:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 21:21:02, Location: Sensor 2, Temp: 19.9 C, Humidity: 66.7 %
+Time: 2026-07-07 21:21:02, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.6 %
+Time: 2026-07-07 21:23:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.7 %
+Time: 2026-07-07 21:26:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 21:27:01, Location: Sensor 2, Temp: 19.9 C, Humidity: 66.8 %
+Time: 2026-07-07 21:27:01, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.5 %
+Time: 2026-07-07 21:29:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.7 %
+Time: 2026-07-07 21:32:02, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.6 %
+Time: 2026-07-07 21:33:09, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.5 %
+Time: 2026-07-07 21:33:10, Location: Sensor 2, Temp: 19.9 C, Humidity: 66.7 %
+Time: 2026-07-07 21:35:08, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.7 %
+Time: 2026-07-07 21:38:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.6 %
+Time: 2026-07-07 21:39:05, Location: Sensor 2, Temp: 19.9 C, Humidity: 66.5 %
+Time: 2026-07-07 21:39:06, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.4 %
+Time: 2026-07-07 21:41:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.6 %
+Time: 2026-07-07 21:44:01, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 21:45:02, Location: Sensor 2, Temp: 19.9 C, Humidity: 66.6 %
+Time: 2026-07-07 21:45:10, Location: Sensor 5, Temp: 21.4 C, Humidity: 55.4 %
+Time: 2026-07-07 21:47:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.7 %
+Time: 2026-07-07 21:51:02, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.4 %
+Time: 2026-07-07 21:51:02, Location: Sensor 2, Temp: 19.9 C, Humidity: 66.8 %
+Time: 2026-07-07 21:53:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.7 %
+Time: 2026-07-07 21:56:08, Location: Sensor 3, Temp: 22.0 C, Humidity: 53.5 %
+Time: 2026-07-07 21:57:02, Location: Sensor 2, Temp: 19.9 C, Humidity: 67.1 %
+Time: 2026-07-07 21:57:08, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.4 %
+Time: 2026-07-07 21:59:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.7 %
+Time: 2026-07-07 22:02:04, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.4 %
+Time: 2026-07-07 22:03:01, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.4 %
+Time: 2026-07-07 22:03:08, Location: Sensor 2, Temp: 19.9 C, Humidity: 67.1 %
+Time: 2026-07-07 22:05:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.7 %
+Time: 2026-07-07 22:08:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.5 %
+Time: 2026-07-07 22:09:01, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.4 %
+Time: 2026-07-07 22:09:02, Location: Sensor 2, Temp: 19.9 C, Humidity: 67.0 %
+Time: 2026-07-07 22:11:01, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.7 %
+Time: 2026-07-07 22:14:04, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.5 %
+Time: 2026-07-07 22:15:01, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.4 %
+Time: 2026-07-07 22:15:03, Location: Sensor 2, Temp: 19.9 C, Humidity: 67.1 %
+Time: 2026-07-07 22:17:03, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.6 %
+Time: 2026-07-07 22:20:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.4 %
+Time: 2026-07-07 22:21:01, Location: Sensor 2, Temp: 19.9 C, Humidity: 67.1 %
+Time: 2026-07-07 22:21:02, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.3 %
+Time: 2026-07-07 22:26:09, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.4 %
+Time: 2026-07-07 22:27:01, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.2 %
+Time: 2026-07-07 22:29:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.4 %
+Time: 2026-07-07 22:32:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.4 %
+Time: 2026-07-07 22:33:02, Location: Sensor 2, Temp: 19.9 C, Humidity: 67.2 %
+Time: 2026-07-07 22:33:05, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.3 %
+Time: 2026-07-07 22:35:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.4 %
+Time: 2026-07-07 22:38:04, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.4 %
+Time: 2026-07-07 22:41:02, Location: Sensor 4, Temp: 20.6 C, Humidity: 58.4 %
+Time: 2026-07-07 22:44:02, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.4 %
+Time: 2026-07-07 22:45:06, Location: Sensor 2, Temp: 20.0 C, Humidity: 68.2 %
+Time: 2026-07-07 22:47:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.4 %
+Time: 2026-07-07 22:50:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.4 %
+Time: 2026-07-07 22:51:01, Location: Sensor 2, Temp: 20.0 C, Humidity: 68.1 %
+Time: 2026-07-07 22:51:01, Location: Sensor 5, Temp: 21.6 C, Humidity: 55.2 %
+Time: 2026-07-07 22:53:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.4 %
+Time: 2026-07-07 22:56:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 22:57:01, Location: Sensor 2, Temp: 20.1 C, Humidity: 68.1 %
+Time: 2026-07-07 22:57:01, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.2 %
+Time: 2026-07-07 22:59:04, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.5 %
+Time: 2026-07-07 23:02:08, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.4 %
+Time: 2026-07-07 23:03:01, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.2 %
+Time: 2026-07-07 23:03:02, Location: Sensor 2, Temp: 20.1 C, Humidity: 68.4 %
+Time: 2026-07-07 23:05:03, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.3 %
+Time: 2026-07-07 23:08:04, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 23:09:02, Location: Sensor 2, Temp: 20.1 C, Humidity: 68.5 %
+Time: 2026-07-07 23:09:02, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.2 %
+Time: 2026-07-07 23:11:02, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.3 %
+Time: 2026-07-07 23:14:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 23:15:01, Location: Sensor 2, Temp: 20.2 C, Humidity: 68.7 %
+Time: 2026-07-07 23:15:10, Location: Sensor 5, Temp: 21.5 C, Humidity: 55.1 %
+Time: 2026-07-07 23:17:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.3 %
+Time: 2026-07-07 23:21:01, Location: Sensor 2, Temp: 20.2 C, Humidity: 69.1 %
+Time: 2026-07-07 23:23:08, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.2 %
+Time: 2026-07-07 23:26:03, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.2 %
+Time: 2026-07-07 23:27:01, Location: Sensor 5, Temp: 21.6 C, Humidity: 54.9 %
+Time: 2026-07-07 23:27:06, Location: Sensor 2, Temp: 20.2 C, Humidity: 68.9 %
+Time: 2026-07-07 23:29:02, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.2 %
+Time: 2026-07-07 23:32:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.2 %
+Time: 2026-07-07 23:33:01, Location: Sensor 2, Temp: 20.2 C, Humidity: 68.6 %
+Time: 2026-07-07 23:33:01, Location: Sensor 5, Temp: 21.6 C, Humidity: 55.0 %
+Time: 2026-07-07 23:38:02, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.3 %
+Time: 2026-07-07 23:41:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.1 %
+Time: 2026-07-07 23:45:01, Location: Sensor 2, Temp: 20.1 C, Humidity: 68.1 %
+Time: 2026-07-07 23:45:01, Location: Sensor 5, Temp: 21.6 C, Humidity: 54.9 %
+Time: 2026-07-07 23:50:07, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.2 %
+Time: 2026-07-07 23:51:01, Location: Sensor 2, Temp: 20.1 C, Humidity: 67.9 %
+Time: 2026-07-07 23:51:02, Location: Sensor 5, Temp: 21.6 C, Humidity: 55.0 %
+Time: 2026-07-07 23:53:03, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.0 %
+Time: 2026-07-07 23:56:01, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.2 %
+Time: 2026-07-07 23:59:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.0 %
+Time: 2026-07-08 00:02:06, Location: Sensor 3, Temp: 22.1 C, Humidity: 53.1 %
+Time: 2026-07-08 00:03:04, Location: Sensor 5, Temp: 21.6 C, Humidity: 54.9 %
+Time: 2026-07-08 00:03:04, Location: Sensor 2, Temp: 20.1 C, Humidity: 67.9 %
+Time: 2026-07-08 00:05:01, Location: Sensor 4, Temp: 20.7 C, Humidity: 58.0 %
+</script>
+
+<script>
+/* ── parse the raw log into per-location series ─────────────────────────── */
+const SENSORS = {};   // name → {ts:[], t:[], h:[]}
+document.getElementById('raw-log').textContent.trim().split('\n').forEach(line => {
+  const m = line.match(/Time: (.+?), Location: (.+?), Temp: ([\d.]+) C, Humidity: ([\d.]+) %/);
+  if (!m) return;
+  const s = SENSORS[m[2]] || (SENSORS[m[2]] = { ts: [], t: [], h: [] });
+  s.ts.push(m[1]); s.t.push(+m[3]); s.h.push(+m[4]);
+});
+// Sensor 1 exists but is offline — represent it honestly everywhere.
+const ALL_NAMES = ['Sensor 1', 'Sensor 2', 'Sensor 3', 'Sensor 4', 'Sensor 5'];
+
+/* one Wong color per location — same in every chart AND the readings panel */
+const LOC_COLORS = {
+  'Sensor 1': '#D55E00', 'Sensor 2': '#0072B2', 'Sensor 3': '#009E73',
+  'Sensor 4': '#E69F00', 'Sensor 5': '#CC79A7',
+};
+const LOC_COLORS_LIGHT = {
+  'Sensor 1': '#BC4C00', 'Sensor 2': '#0550AE', 'Sensor 3': '#1A7F37',
+  'Sensor 4': '#9A6700', 'Sensor 5': '#BF3989',
+};
+const RH_HIGH = 70, RH_WARN_MARGIN = 5;   // % — house env band (30–70, ±5 warn)
+
+function isLight(){ return document.documentElement.getAttribute('data-theme') === 'light'; }
+function locColor(name){ return (isLight() ? LOC_COLORS_LIGHT : LOC_COLORS)[name]; }
+function theme(){
+  const L = isLight();
+  const ax = { gridcolor: L ? '#e8ecf0' : '#21262d', linecolor: L ? '#d0d7de' : '#30363d',
+               tickfont: { size: 11 }, zerolinecolor: L ? '#d0d7de' : '#30363d' };
+  return {
+    paper_bgcolor: L ? '#ffffff' : '#161b22', plot_bgcolor: L ? '#ffffff' : '#161b22',
+    font: { color: L ? '#1f2328' : '#e6edf3',
+            family: 'Arial, "Helvetica Neue", Helvetica, sans-serif', size: 12 },
+    margin: { l: 52, r: 14, t: 8, b: 40 }, hovermode: 'x unified', showlegend: true,
+    legend: { orientation: 'h', y: 1.06, x: 0, font: { size: 11.5 },
+              bgcolor: 'rgba(0,0,0,0)' },
+    xaxis: ax, yaxis: Object.assign({}, ax),
+  };
+}
+const CFG = { responsive: true, displaylogo: false,
+              modeBarButtonsToRemove: ['select2d', 'lasso2d'] };
+
+function lineTraces(field, opts) {
+  return Object.keys(SENSORS).map(name => Object.assign({
+    x: SENSORS[name].ts, y: SENSORS[name][field], name: name,
+    type: 'scatter', mode: 'lines', line: { color: locColor(name), width: 2 },
+    hovertemplate: name + ' %{y:.1f}' + (field === 't' ? ' °C' : ' %') + '<extra></extra>',
+  }, opts || {}));
+}
+function rhLimitShapes() {
+  return [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: RH_HIGH, y1: RH_HIGH,
+            line: { color: isLight() ? '#bc4c00' : '#db6d28', width: 1, dash: 'dot' } }];
+}
+const rhLimitNote = () => [{ xref: 'paper', x: 0.005, y: RH_HIGH, xanchor: 'left',
+  yanchor: 'top', showarrow: false, text: 'RH high limit 70%',
+  font: { size: 10, color: isLight() ? '#bc4c00' : '#db6d28' } }];
+
+/* ── the three candidate layouts ─────────────────────────────────────────── */
+function panel(title, id, h) {
+  return '<div class="chart-panel"><div class="chart-title">' + title +
+         '</div><div id="' + id + '" style="height:' + h + 'px"></div></div>';
+}
+
+function renderA() {   // single overlaid dual-axis — closest to today, 8 lines
+  area.innerHTML = panel('Temperature &amp; Humidity — all locations, one chart (temp solid · RH dotted)', 'ch-a', 470);
+  const t = lineTraces('t', { legendgroup: 'g' });
+  const h = lineTraces('h').map(tr => Object.assign(tr, {
+    yaxis: 'y2', line: Object.assign(tr.line, { dash: 'dot', width: 1.5 }),
+    name: tr.name + ' RH', legendgroup: 'g2',
+  }));
+  Plotly.newPlot('ch-a', t.concat(h), Object.assign(theme(), {
+    yaxis: Object.assign(theme().yaxis, { title: { text: 'Temperature (°C)', font: { size: 12 } } }),
+    yaxis2: Object.assign({}, theme().yaxis, { overlaying: 'y', side: 'right',
+      title: { text: 'Humidity (%)', font: { size: 12 } } }),
+    margin: { l: 52, r: 52, t: 8, b: 40 },
+  }), CFG);
+}
+
+function renderB() {   // stacked pair — recommended
+  area.innerHTML =
+    panel('Temperature by location', 'ch-bt', 265) +
+    panel('Relative humidity by location', 'ch-bh', 265);
+  Plotly.newPlot('ch-bt', lineTraces('t'), Object.assign(theme(), {
+    yaxis: Object.assign(theme().yaxis, { title: { text: '°C', font: { size: 12 } } }),
+  }), CFG);
+  Plotly.newPlot('ch-bh', lineTraces('h'), Object.assign(theme(), {
+    showlegend: false,
+    yaxis: Object.assign(theme().yaxis, { title: { text: '%', font: { size: 12 } } }),
+    shapes: rhLimitShapes(), annotations: rhLimitNote(),
+  }), CFG);
+}
+
+function renderC() {   // per-location small multiples
+  const names = Object.keys(SENSORS);
+  area.innerHTML = '<div class="grid2">' +
+    names.map((n, i) =>
+      panel(n + ' — temp (°C) &amp; RH (%)', 'ch-c' + i, 205)).join('') +
+    '</div>';
+  const tAll = [].concat(...names.map(n => SENSORS[n].t));
+  const hAll = [].concat(...names.map(n => SENSORS[n].h));
+  const tRange = [Math.min(...tAll) - .4, Math.max(...tAll) + .4];
+  const hRange = [Math.min(...hAll) - 2, Math.max(...hAll) + 2];
+  names.forEach((n, i) => {
+    const col = locColor(n);
+    Plotly.newPlot('ch-c' + i, [
+      { x: SENSORS[n].ts, y: SENSORS[n].t, name: 'Temp', type: 'scatter', mode: 'lines',
+        line: { color: col, width: 2 },
+        hovertemplate: '%{y:.1f} °C<extra></extra>' },
+      { x: SENSORS[n].ts, y: SENSORS[n].h, name: 'RH', type: 'scatter', mode: 'lines',
+        yaxis: 'y2', line: { color: col, width: 1.5, dash: 'dot' },
+        hovertemplate: '%{y:.1f} %<extra></extra>' },
+    ], Object.assign(theme(), {
+      showlegend: false, margin: { l: 42, r: 42, t: 6, b: 32 },
+      yaxis: Object.assign(theme().yaxis, { range: tRange }),
+      yaxis2: Object.assign({}, theme().yaxis, { overlaying: 'y', side: 'right',
+        range: hRange, showgrid: false }),
+    }), CFG);
+  });
+}
+
+/* ── readings panel ──────────────────────────────────────────────────────── */
+function ago(tsStr, nowMs) {
+  const mins = Math.round((nowMs - new Date(tsStr.replace(' ', 'T')).getTime()) / 60000);
+  return mins < 1 ? 'just now' : mins + ' min ago';
+}
+function renderReadings() {
+  // "now" = latest timestamp in the dataset (static snapshot preview)
+  const nowMs = Math.max(...Object.values(SENSORS).map(
+    s => new Date(s.ts[s.ts.length - 1].replace(' ', 'T')).getTime()));
+  document.getElementById('r-body').innerHTML = ALL_NAMES.map(n => {
+    const s = SENSORS[n];
+    if (!s) return '<div class="r-row dead"><span class="dot off"></span><div>' +
+      '<div class="r-name">' + n + '</div>' +
+      '<div class="r-vals">no data</div><div class="r-age">offline</div></div></div>';
+    const t = s.t[s.t.length - 1], h = s.h[s.h.length - 1];
+    const warn = h > RH_HIGH - RH_WARN_MARGIN || h < 30 + RH_WARN_MARGIN;
+    return '<div class="r-row"><span class="dot" style="background:' + locColor(n) + '"></span><div>' +
+      '<div class="r-name">' + n + '</div>' +
+      '<div class="r-vals"><b>' + t.toFixed(1) + '<span class="u"> °C</span></b> &nbsp;·&nbsp; ' +
+      '<b class="' + (warn ? 'warn' : '') + '">' + h.toFixed(1) + '<span class="u"> %</span></b></div>' +
+      '<div class="r-age">' + ago(s.ts[s.ts.length - 1], nowMs) + '</div></div></div>';
+  }).join('');
+  document.getElementById('r-foot').textContent =
+    'Snapshot at ' + new Date(nowMs).toTimeString().slice(0, 5) + ' · updates every ~6 min';
+}
+
+/* ── wiring ──────────────────────────────────────────────────────────────── */
+const area = document.getElementById('chart-area');
+const RENDER = { A: renderA, B: renderB, C: renderC };
+let variant = 'B';
+function render() { RENDER[variant](); renderReadings(); }
+
+document.getElementById('variant-seg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  variant = b.dataset.v;
+  document.querySelectorAll('#variant-seg button').forEach(x =>
+    x.classList.toggle('active', x === b));
+  render();
+});
+document.getElementById('btn-theme').addEventListener('click', () => {
+  document.documentElement.setAttribute('data-theme', isLight() ? 'dark' : 'light');
+  render();
+});
+const readings = document.getElementById('readings');
+document.getElementById('r-toggle').addEventListener('click', () => {
+  readings.classList.toggle('collapsed');
+  const c = readings.classList.contains('collapsed');
+  document.getElementById('r-toggle').innerHTML = c ? '&#x276E;' : '&#x276F;';
+  setTimeout(() => area.querySelectorAll('.js-plotly-plot')
+    .forEach(p => Plotly.Plots.resize(p)), 270);
+});
+render();
+</script>
+</body>
+</html>
