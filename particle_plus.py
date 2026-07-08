@@ -829,14 +829,35 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     rh_js         = json.dumps(live_rh_vals)
 
     # ── distributed Shelly temp/RH sensors (features/temp_humidity_sensor) ──
-    # Extra per-location traces on the same env chart. Missing/empty csv →
-    # empty list → chart renders exactly as before sensors existed.
+    # Missing/empty csv → empty list → env section renders sensor-less.
     try:
         from features.temp_humidity_sensor.reader import load_sensor_series
-        env_sensors_js = json.dumps(load_sensor_series(days=env_days))
+        _env_sensors = load_sensor_series(days=env_days)
     except Exception as _e:
         log(f"WARNING: temp/humidity sensor csv unavailable: {_e}", 'WARN')
-        env_sensors_js = '[]'
+        _env_sensors = []
+
+    # LOCAL env section: "Sensor 1" = the particle counter's own temp/RH, taken
+    # from the measurement records (archive rows carry temp_C / RH_pct). All
+    # sensors report °C, embedded as-is — the local env section displays °C.
+    if local:
+        _s1_ts, _s1_t, _s1_h = [], [], []
+        for _r in recent:
+            _d = (_r.get('date') or '').strip()
+            _t = (_r.get('time') or '').strip()
+            if not _d or not _t:
+                continue
+            _tc  = sf(_r.get('temp_C'))
+            _rhv = sf(_r.get('RH_pct'))
+            if _tc is None or _rhv is None or _rhv <= 1:   # old rows lack real env values
+                continue
+            _s1_ts.append(f'{_d} {_t}')
+            _s1_t.append(_tc)
+            _s1_h.append(_rhv)
+        if _s1_ts:
+            _env_sensors = [{'name': 'Sensor 1', 'ts': _s1_ts,
+                             'temp': _s1_t, 'rh': _s1_h}] + _env_sensors
+    env_sensors_js = json.dumps(_env_sensors)
 
     # ISO 14644-1:2015 concentration limits (counts/m³) for the 0.5 µm channel.
     # These are added as reference lines on the particle count chart so the
@@ -916,7 +937,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         '<span class="lh">&#9473; Humidity</span></div>\n'
         '    <div id="env-cards" class="env-cards"></div>\n'
         '    <div id="env-chips" class="env-chips" style="display:none"></div>\n'
-        '    <div id="chart-env" style="height:560px; display:none"></div>'
+        '    <div id="chart-env" style="height:440px; display:none"></div>'
     ) if local else (
         '<div class="chart-title">Temperature &amp; Humidity Over Time</div>\n'
         '    <div id="chart-env" style="height:280px"></div>'
@@ -1560,7 +1581,16 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
   [data-theme="light"] .env-card-vals .vh {{ color: #0550AE; }}
   .env-card-vals .u {{ font-size: 11px; font-weight: 400; color: var(--text-secondary);
     text-transform: none; }}
-  .env-spark {{ width: 100%; height: 34px; display: block; }}
+  .env-spark-wrap {{ display: flex; align-items: stretch; gap: 4px; }}
+  .spark-ax {{ display: flex; flex-direction: column; justify-content: space-between;
+    font-size: 8.5px; line-height: 1; flex: none; min-width: 22px; padding: 1px 0; }}
+  .spark-ax.ax-t {{ color: #D55E00; text-align: right; }}
+  .spark-ax.ax-h {{ color: #0072B2; text-align: left; }}
+  [data-theme="light"] .spark-ax.ax-t {{ color: #BC4C00; }}
+  [data-theme="light"] .spark-ax.ax-h {{ color: #0550AE; }}
+  .spark-x {{ display: flex; justify-content: space-between; font-size: 8.5px;
+    color: var(--text-secondary); margin: 3px 24px 0 26px; }}
+  .env-spark {{ width: 100%; height: 38px; display: block; flex: 1; min-width: 0; }}
   .env-spark path {{ fill: none; stroke-width: 1.4; vector-effect: non-scaling-stroke; }}
   .env-spark .st {{ stroke: #D55E00; }}  .env-spark .sh {{ stroke: #0072B2; }}
   .env-spark .dt {{ fill: #D55E00; }}    .env-spark .dh {{ fill: #0072B2; }}

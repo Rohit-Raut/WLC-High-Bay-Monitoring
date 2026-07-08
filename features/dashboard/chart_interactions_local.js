@@ -205,8 +205,7 @@ function sliceIdx(mins) {
 // (e.g., counter down while the Shellys keep reporting).
 function envTimeSpan(mins) {
   const firsts = [], lasts = [];
-  if (LIVE_TS.length) { firsts.push(LIVE_TS[0]); lasts.push(LIVE_TS[LIVE_TS.length - 1]); }
-  _SENS.forEach(function (s) {
+  ENV_SITES.forEach(function (s) {
     if (s.ts.length) { firsts.push(s.ts[0]); lasts.push(s.ts[s.ts.length - 1]); }
   });
   if (!lasts.length) return null;
@@ -217,30 +216,23 @@ function envTimeSpan(mins) {
   return { left: left, right: right };
 }
 
-// ── Environment section: per-sensor cards (View B) ↔ cohort envelope (View C) ──
-// Sensor 1 = the particle counter's internal sensor; Sensors 2+ = the Shellys
-// (ENV_SENSORS). View B is a card grid: current values + status tag + 28-day
-// sparkline. Clicking a card (or the Cohort segment) swaps in View C: min–max
-// spread band + median line per quantity, with flagged / selected sensors drawn
-// bold in their identity color. State survives the auto-refresh reload.
+// ── Environment section: per-sensor cards (View B) ↔ combined chart (View C) ──
+// All sites arrive via ENV_SENSORS (°C): the generator prepends "Sensor 1" =
+// the particle counter's own temp/RH from the measurement archive, followed by
+// the Shellys. View B is a card grid: current values + mini-axis sparkline.
+// The Cohort segment / a card click swaps in View C: the classic dual-axis
+// chart (temperature left, humidity right, every sensor at once), with the
+// selected sensor emphasized. State survives the auto-refresh reload.
 
-const ENV_BIN_MS    = 5 * 60 * 1000;  // cohort alignment buckets
-const SPARK_BIN_MS  = 2 * 60 * 60 * 1000;  // sparkline buckets (28 d window)
+const SPARK_BIN_MS  = 2 * 60 * 60 * 1000;  // sparkline buckets (≤28 d window)
 const SPARK_DAYS    = 28;
-const TEMP_FLAG     = 1.0;   // °F from cohort median → warm / cool
-const RH_FLAG       = 3.5;   // %  from cohort median → humid / dry
 const ENV_STALE_MIN = 30;    // minutes without a report → stale
 
 // Sensor identity colors (Okabe–Ito, colorblind-safe), keyed by sensor number
 // so Sensor 4 keeps its color even while sensors are missing.
 const SITE_COLORS = ['#0072B2', '#E69F00', '#009E73', '#D55E00', '#CC79A7', '#56B4E9'];
 
-const ENV_SITES = (function () {
-  const sites = [];
-  if (LIVE_TS.length) sites.push({ name: 'Sensor 1', ts: LIVE_TS, temp: TEMP_F, rh: RH_VALS });
-  _SENS.forEach(function (s) { sites.push({ name: s.name, ts: s.ts, temp: s.temp, rh: s.rh }); });
-  return sites;
-})();
+const ENV_SITES = _SENS.slice();
 
 function siteColor(site, idx) {
   const m = /(\d+)\s*$/.exec(site.name);
@@ -258,37 +250,25 @@ function _median(a) {
   return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null;
 }
 
-// Latest reading + status per site. Status is RELATIVE to the cohort median of
-// the live sensors (no hardware spec band exists): warm/cool by temperature
-// first, else humid/dry by RH, else nominal. Silent >30 min → stale.
+// Latest reading per site. No status vocabulary — the only marker kept is
+// "stale" (silent > 30 min), because showing a dead sensor's numbers as if
+// they were live would be dishonest.
 function envStatuses() {
   const span  = envTimeSpan(0);
   const nowMs = span ? _parseDate(span.right).getTime() : Date.now();
-  const infos = ENV_SITES.map(function (s, i) {
+  return ENV_SITES.map(function (s, i) {
     const lastTs = s.ts.length ? _parseDate(s.ts[s.ts.length - 1]).getTime() : 0;
     return { site: s, idx: i, color: siteColor(s, i),
              t: _lastVal(s.temp), h: _lastVal(s.rh),
              stale: !s.ts.length || nowMs - lastTs > ENV_STALE_MIN * 60000 };
   });
-  const live = infos.filter(function (x) { return !x.stale; });
-  const medT = _median(live.map(function (x) { return x.t; }).filter(function (v) { return v !== null; }));
-  const medH = _median(live.map(function (x) { return x.h; }).filter(function (v) { return v !== null; }));
-  infos.forEach(function (x) {
-    if (x.stale) { x.tag = 'stale'; x.cls = 'stale'; x.flag = false; return; }
-    const dT = x.t !== null && medT !== null ? x.t - medT : 0;
-    const dH = x.h !== null && medH !== null ? x.h - medH : 0;
-    if      (dT >  TEMP_FLAG) { x.tag = 'warm ▲';  x.cls = 'warm';  x.flag = true; }
-    else if (dT < -TEMP_FLAG) { x.tag = 'cool ▼';  x.cls = 'cool';  x.flag = true; }
-    else if (dH >  RH_FLAG)   { x.tag = 'humid ▲'; x.cls = 'humid'; x.flag = true; }
-    else if (dH < -RH_FLAG)   { x.tag = 'dry ▼';   x.cls = 'dry';   x.flag = true; }
-    else                      { x.tag = 'nominal';      x.cls = 'ok';    x.flag = false; }
-  });
-  return infos;
 }
 
-// ── View B: cards with dual sparklines ───────────────────────────────────────
+// ── View B: cards with dual mini-axis sparklines ─────────────────────────────
 // Each sparkline series is auto-scaled to its OWN min/max (a single sensor's
-// temp only moves ~1 °F — a shared range would flatten it to a line).
+// temp only moves ~1 °C — a shared range would flatten it to a line). The
+// min/max of each series and the start/end times are printed as tiny axis
+// labels so the shape has a scale.
 function _sparkSeries(ts, vals, i0, fromMs, toMs, y0, y1) {
   const bin = binByTime(ts.slice(i0), vals.slice(i0), SPARK_BIN_MS);
   const pts = [];
@@ -296,29 +276,47 @@ function _sparkSeries(ts, vals, i0, fromMs, toMs, y0, y1) {
     const t = _parseDate(bin.x[k]).getTime();
     if (t >= fromMs && t <= toMs) pts.push([t, bin.y[k]]);
   }
-  if (pts.length < 2) return '';
+  if (pts.length < 2) return null;
   let lo = Infinity, hi = -Infinity;
   pts.forEach(function (p) { if (p[1] < lo) lo = p[1]; if (p[1] > hi) hi = p[1]; });
+  const rawLo = lo, rawHi = hi;
   if (hi - lo < 1e-9) { hi += 0.5; lo -= 0.5; }
   const X = function (t) { return ((t - fromMs) / (toMs - fromMs) * 100).toFixed(2); };
   const Y = function (v) { return (y0 + (1 - (v - lo) / (hi - lo)) * (y1 - y0)).toFixed(2); };
   let d = '';
   pts.forEach(function (p, k) { d += (k ? 'L' : 'M') + X(p[0]) + ',' + Y(p[1]); });
   const end = pts[pts.length - 1];
-  return { d: d, ex: X(end[0]), ey: Y(end[1]) };
+  return { d: d, ex: X(end[0]), ey: Y(end[1]), lo: rawLo, hi: rawHi };
 }
-function _sparkSvg(site) {
+function _sparkTimeLbl(ms) {
+  const d = _parseDate(ms);
+  const p = function (n) { return String(n).padStart(2, '0'); };
+  return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function _sparkHtml(site) {
   const last  = site.ts.length ? _parseDate(site.ts[site.ts.length - 1]).getTime() : Date.now();
   const first = site.ts.length ? _parseDate(site.ts[0]).getTime() : last;
   // up to SPARK_DAYS of history, but never wider than the data actually spans —
   // a young sensor's trace should fill the sparkline, not hide at its edge
   const fromMs = Math.max(last - SPARK_DAYS * 86400000, first);
-  const t = _sparkSeries(site.ts, site.temp, 0, fromMs, last, 2, 32);
-  const h = _sparkSeries(site.ts, site.rh,   0, fromMs, last, 2, 32);
-  let svg = '<svg class="env-spark" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true">';
+  const t = _sparkSeries(site.ts, site.temp, 0, fromMs, last, 3, 35);
+  const h = _sparkSeries(site.ts, site.rh,   0, fromMs, last, 3, 35);
+  let svg = '<svg class="env-spark" viewBox="0 0 100 38" preserveAspectRatio="none" aria-hidden="true">';
   if (h) svg += '<path class="sh" d="' + h.d + '"/><circle class="dh" cx="' + h.ex + '" cy="' + h.ey + '" r="1.6"/>';
   if (t) svg += '<path class="st" d="' + t.d + '"/><circle class="dt" cx="' + t.ex + '" cy="' + t.ey + '" r="1.6"/>';
-  return svg + '</svg>';
+  svg += '</svg>';
+  // mini axes: temp min/max on the left (°C), RH min/max on the right (%),
+  // window start/end along the bottom
+  const axL = t ? '<span>' + t.hi.toFixed(1) + '</span><span>' + t.lo.toFixed(1) + '</span>'
+               : '<span></span><span></span>';
+  const axR = h ? '<span>' + h.hi.toFixed(0) + '</span><span>' + h.lo.toFixed(0) + '</span>'
+               : '<span></span><span></span>';
+  return '<div class="env-spark-wrap">' +
+           '<div class="spark-ax ax-t">' + axL + '</div>' + svg +
+           '<div class="spark-ax ax-h">' + axR + '</div>' +
+         '</div>' +
+         '<div class="spark-x"><span>' + _sparkTimeLbl(fromMs) + '</span>' +
+           '<span>' + _sparkTimeLbl(last) + '</span></div>';
 }
 function renderEnvCards() {
   const box = document.getElementById('env-cards');
@@ -331,128 +329,89 @@ function renderEnvCards() {
       '<div class="env-card-head"><span class="env-dot" style="background:' +
         _traceColor(x.color) + '"></span>' +
       '<span class="env-card-name">' + x.site.name + '</span>' +
-      '<span class="env-tag ' + x.cls + '">' + x.tag + '</span></div>' +
-      '<div class="env-card-vals"><span class="vt">' + tv + '<span class="u">°F</span></span>' +
+      (x.stale ? '<span class="env-tag stale">stale</span>' : '') + '</div>' +
+      '<div class="env-card-vals"><span class="vt">' + tv + '<span class="u">°C</span></span>' +
       '<span class="vh">' + hv + '<span class="u">%</span></span></div>' +
-      _sparkSvg(x.site) + '</div>';
+      _sparkHtml(x.site) + '</div>';
   }).join('');
 }
 
-// ── View C: cohort envelope (spread band + median + bold flagged/selected) ──
-function _binMap(ts, vals, i0, binMs, leftMs) {
-  const acc = new Map();
-  for (let k = i0; k < ts.length; k++) {
-    const v = vals[k];
-    if (v === null || v === undefined || isNaN(v)) continue;
-    const t = _parseDate(ts[k]).getTime();
-    if (isNaN(t) || (leftMs && t < leftMs)) continue;   // clip to visible window
-    const key = Math.floor(t / binMs) * binMs;
-    let b = acc.get(key);
-    if (!b) { b = { s: 0, n: 0 }; acc.set(key, b); }
-    b.s += v; b.n += 1;
-  }
-  const out = new Map();
-  acc.forEach(function (b, k) { out.set(k, b.s / b.n); });
-  return out;
-}
-// Cohort bins are coarser than the Shellys' ~6 min staggered cadence so every
-// bin holds (nearly) all sensors — 5 min bins made the "median" hop from
-// sensor to sensor. Gaps: a key jump > 3 bins inserts a null so Plotly BREAKS
-// the line instead of bridging days of missing data (honest-gaps rule); the
-// band/median additionally require ≥2 sensors in the bin.
+// ── View C: the classic combined chart — every sensor at once, temperature on
+// the left axis (solid, sensor color) and humidity on the right (same color,
+// lighter). 15-min bins smooth the mixed cadences (counter ~2 min, Shellys
+// ~6 min); a gap > 3 bins inserts a null so lines BREAK instead of bridging
+// missing data (honest-gaps rule). The drilled-into / chip-selected sensor is
+// drawn bold while the rest dim for context.
 const COHORT_BIN_MS = 15 * 60 * 1000;
 const COHORT_GAP_MS = 3 * COHORT_BIN_MS;
 
-function _cohortTraces(infos, field, yaxis, mins, isLight, leftMs) {
-  const maps = infos.map(function (x) {
-    const i0 = sliceIdxForArray(x.site.ts, mins);
-    return _binMap(x.site.ts, x.site[field], i0, COHORT_BIN_MS, leftMs);
-  });
-  const keySet = new Set();
-  maps.forEach(function (m) { m.forEach(function (_, k) { keySet.add(k); }); });
-  const keys = Array.from(keySet).sort(function (a, b) { return a - b; });
-  const kx = function (k) { return _toLocalStr(new Date(k + COHORT_BIN_MS / 2)); };
-
-  const x = [], lo = [], hi = [], med = [];
-  let prevK = null;
-  keys.forEach(function (k) {
-    if (prevK !== null && k - prevK > COHORT_GAP_MS) {   // break the line
-      x.push(kx(prevK + COHORT_BIN_MS)); lo.push(null); hi.push(null); med.push(null);
+function _gapBrokenXY(ts, vals, i0, leftMs) {
+  const bin = binByTime(ts.slice(i0), vals.slice(i0), COHORT_BIN_MS);
+  const x = [], y = [];
+  let prev = null;
+  for (let k = 0; k < bin.x.length; k++) {
+    const t = _parseDate(bin.x[k]).getTime();
+    if (leftMs && t < leftMs) continue;                  // clip to visible window
+    if (prev !== null && t - prev > COHORT_GAP_MS) {     // break the line
+      x.push(_toLocalStr(new Date(prev + COHORT_BIN_MS))); y.push(null);
     }
-    prevK = k;
-    const vals = [];
-    maps.forEach(function (m) { if (m.has(k)) vals.push(m.get(k)); });
-    x.push(kx(k));
-    if (vals.length < 2) { lo.push(null); hi.push(null); med.push(null); return; }
-    lo.push(Math.min.apply(null, vals));
-    hi.push(Math.max.apply(null, vals));
-    med.push(_median(vals));
-  });
-  const traces = [
-    { x: x, y: hi, yaxis: yaxis, type: 'scatter', mode: 'lines',
-      line: { width: 0 }, hoverinfo: 'skip', showlegend: false },
-    { x: x, y: lo, yaxis: yaxis, type: 'scatter', mode: 'lines',
-      line: { width: 0 }, fill: 'tonexty', fillcolor: 'rgba(96,105,117,0.22)',
-      hoverinfo: 'skip', showlegend: false },
-  ];
-  // faint per-site context lines inside the band (bold = flagged / selected),
-  // each broken at its own reporting gaps
-  infos.forEach(function (xi, si) {
-    const m = maps[si], sx = [], sy = [];
-    let pk = null;
-    keys.forEach(function (k) {
-      if (!m.has(k)) return;
-      if (pk !== null && k - pk > COHORT_GAP_MS) { sx.push(kx(pk + COHORT_BIN_MS)); sy.push(null); }
-      pk = k;
-      sx.push(kx(k)); sy.push(m.get(k));
-    });
-    if (!sx.length) return;
-    traces.push({ x: sx, y: sy, yaxis: yaxis, type: 'scatter', mode: 'lines',
-      name: xi.site.name, showlegend: false,
-      hovertemplate: xi.site.name + ' %{y:.1f}' + (field === 'temp' ? ' °F' : ' %') + '<extra></extra>',
-      line: xi.bold ? { color: _traceColor(xi.color), width: 2.5 }
-                    : { color: 'rgba(139,148,158,0.35)', width: 1 } });
-  });
-  traces.push({ x: x, y: med, yaxis: yaxis, type: 'scatter', mode: 'lines',
-    name: 'median', showlegend: false,
-    hovertemplate: 'median %{y:.1f}' + (field === 'temp' ? ' °F' : ' %') + '<extra></extra>',
-    line: { color: isLight ? '#2a2f36' : '#c9d1d9', width: 2 } });
-  return traces;
+    prev = t;
+    x.push(bin.x[k]); y.push(bin.y[k]);
+  }
+  return { x: x, y: y };
 }
 function renderEnvCohort(mins, DARK) {
-  const infos = envStatuses();
-  // bold = the card the user drilled into, else every flagged sensor
-  infos.forEach(function (x) {
-    x.bold = _envHighlight ? x.site.name === _envHighlight : x.flag;
-  });
-  const isLight = _isLightTheme();
+  const infos    = envStatuses();
   const span     = envTimeSpan(mins);
   const envRange = span ? { range: [span.left, span.right], autorange: false } : {};
   const leftMs   = span ? _parseDate(span.left).getTime() : 0;
-  const traces = _cohortTraces(infos, 'temp', 'y', mins, isLight, leftMs)
-         .concat(_cohortTraces(infos, 'rh',   'y2', mins, isLight, leftMs));
+  const anySel   = !!_envHighlight;
+  const traces   = [];
+  infos.forEach(function (xi) {
+    const i0   = sliceIdxForArray(xi.site.ts, mins);
+    const tSer = _gapBrokenXY(xi.site.ts, xi.site.temp, i0, leftMs);
+    const hSer = _gapBrokenXY(xi.site.ts, xi.site.rh,   i0, leftMs);
+    const sel  = xi.site.name === _envHighlight;
+    const col  = _traceColor(xi.color);
+    const wT   = anySel ? (sel ? 2.6 : 1.1) : 1.8;
+    const op   = anySel ? (sel ? 1 : 0.35) : 0.9;
+    traces.push({ x: tSer.x, y: tSer.y, yaxis: 'y', name: xi.site.name + ' T',
+      type: 'scatter', mode: 'lines', opacity: op, showlegend: false,
+      hovertemplate: xi.site.name + ' %{y:.1f} °C<extra></extra>',
+      line: { color: col, width: wT } });
+    traces.push({ x: hSer.x, y: hSer.y, yaxis: 'y2', name: xi.site.name + ' RH',
+      type: 'scatter', mode: 'lines', opacity: op * 0.75, showlegend: false,
+      hovertemplate: xi.site.name + ' %{y:.1f} %<extra></extra>',
+      line: { color: col, width: wT * 0.85 } });
+  });
   return Plotly.react('chart-env', traces, Object.assign({}, DARK, {
-    margin: { l: 60, r: 30, t: 26, b: 40 },
+    margin: { l: 60, r: 70, t: 26, b: 46 },
     showlegend: false,
-    xaxis:  Object.assign({}, DARK.xaxis, { title: '', anchor: 'y2' },
+    xaxis:  Object.assign({}, DARK.xaxis, { title: '' },
                           span ? { maxallowed: span.right } : {}, envRange),
     yaxis:  Object.assign({}, DARK.yaxis, {
-      title: 'Temperature (°F)', domain: [0.58, 1], fixedrange: true }),
+      title: 'Temperature (°C)', fixedrange: true }),
     yaxis2: Object.assign({}, DARK.yaxis, {
-      title: 'Humidity (%)', domain: [0, 0.44], fixedrange: true }),
-  }), PLOTLY_CFG);
+      title: { text: 'Humidity (%)', standoff: 15 },
+      overlaying: 'y', side: 'right', fixedrange: true, showgrid: false }),
+  }), PLOTLY_CFG).then(function (gd) {
+    // first cohort render turns #chart-env into a Plotly plot — attach the
+    // modebar +/- zoom interceptor now (idempotent for the other charts)
+    if (window._attachRelayoutListeners) window._attachRelayoutListeners();
+    return gd;
+  });
 }
 function renderEnvChips() {
   const box = document.getElementById('env-chips');
   if (!box) return;
   box.innerHTML = envStatuses().map(function (x) {
     const sel = _envHighlight === x.site.name;
-    const tv = x.t !== null ? x.t.toFixed(1) + '°' : '—';
+    const tv = x.t !== null ? x.t.toFixed(1) + '°C' : '—';
     const hv = x.h !== null ? x.h.toFixed(0) + '%' : '—';
     return '<button class="env-chip' + (sel ? ' sel' : '') + '" data-site="' + x.site.name + '">' +
       '<span class="env-dot" style="background:' + _traceColor(x.color) + '"></span>' +
       '<b>S' + (x.site.name.replace(/\D+/g, '') || '?') + '</b> ' + tv + '/' + hv +
-      ' <span class="env-tag ' + x.cls + '">' + x.tag + '</span></button>';
+      (x.stale ? ' <span class="env-tag stale">stale</span>' : '') + '</button>';
   }).join('');
 }
 
@@ -901,7 +860,11 @@ window._attachWheelListeners = function () {
 window._attachRelayoutListeners = function () {
   ['chart-counts', 'chart-pm', 'chart-env'].forEach(function (divId) {
     var el = document.getElementById(divId);
-    if (!el) return;   // chart-pm is absent on the public dashboard
+    // skip absent divs AND divs Plotly hasn't initialized — chart-env only
+    // becomes a Plotly plot once the Cohort view is first opened (renderEnvCohort
+    // re-invokes this attacher, so the guard also makes it idempotent)
+    if (!el || typeof el.on !== 'function' || el._wlcRelayoutAttached) return;
+    el._wlcRelayoutAttached = true;
     el.on('plotly_relayout', function (ev) {
       if (_zooming) return;  // ignore redraws triggered by our own filterAndRender
 
