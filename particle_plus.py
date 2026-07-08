@@ -828,6 +828,16 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     temp_f_js     = json.dumps(live_temp_f)
     rh_js         = json.dumps(live_rh_vals)
 
+    # ── distributed Shelly temp/RH sensors (features/temp_humidity_sensor) ──
+    # Extra per-location traces on the same env chart. Missing/empty csv →
+    # empty list → chart renders exactly as before sensors existed.
+    try:
+        from features.temp_humidity_sensor.reader import load_sensor_series
+        env_sensors_js = json.dumps(load_sensor_series(days=env_days))
+    except Exception as _e:
+        log(f"WARNING: temp/humidity sensor csv unavailable: {_e}", 'WARN')
+        env_sensors_js = '[]'
+
     # ISO 14644-1:2015 concentration limits (counts/m³) for the 0.5 µm channel.
     # These are added as reference lines on the particle count chart so the
     # measured concentrations can be compared directly to the standard.
@@ -1558,6 +1568,7 @@ const CH2_PM   = {ch2_pm_js};
 const LIVE_TS  = {live_ts_js};
 const TEMP_F   = {temp_f_js};
 const RH_VALS  = {rh_js};
+const ENV_SENSORS = {env_sensors_js};
 const ISO_LINES = {iso_lines_js};
 const IS_LOCAL  = {is_local_js};
 </script>

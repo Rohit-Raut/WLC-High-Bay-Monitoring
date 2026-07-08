@@ -28,14 +28,22 @@ const _allPMVals = PM.flatMap(tr => tr.y).filter(v => v !== null && v >= 0);
 const _rawPMMax  = _allPMVals.length ? Math.max(..._allPMVals) : 10;
 const PM_Y_MAX   = Math.max(_rawPMMax * 1.2, 5);
 
+// Distributed Shelly sensors share the env chart axes — include their values
+// so no trace clips. ENV_SENSORS is embedded by the generator ([] when the
+// sensor csv is absent); the typeof guard covers stale generated pages.
+const _SENS = (typeof ENV_SENSORS !== 'undefined' && Array.isArray(ENV_SENSORS))
+  ? ENV_SENSORS : [];
+
 // Temperature (°F).  ±5 °F padding around observed range; floor at 32 °F.
-const _tempVals  = TEMP_F.filter(v => v !== null && !isNaN(v));
+const _tempVals  = TEMP_F.concat(..._SENS.map(s => s.temp))
+  .filter(v => v !== null && !isNaN(v));
 const TEMP_Y_RANGE = _tempVals.length
   ? [Math.max(32,  Math.min(..._tempVals) - 5), Math.max(..._tempVals) + 5]
   : [60, 90];
 
 // Relative humidity (%).  ±5 % padding; clamped to [0, 100].
-const _rhVals   = RH_VALS.filter(v => v !== null && !isNaN(v));
+const _rhVals   = RH_VALS.concat(..._SENS.map(s => s.rh))
+  .filter(v => v !== null && !isNaN(v));
 const RH_Y_RANGE = _rhVals.length
   ? [Math.max(0,   Math.min(..._rhVals) - 5), Math.min(100, Math.max(..._rhVals) + 5)]
   : [0, 100];
@@ -190,6 +198,47 @@ function sliceIdxForArray(tsArray, mins) {
 
 function sliceIdx(mins) {
   return sliceIdxForArray(TS, mins);
+}
+
+// ── Env-chart helpers for the distributed Shelly sensors ─────────────────────
+// The x window must span the counter AND every sensor series — anchoring to
+// LIVE_TS alone would clip sensor reports newer than the last counter sample
+// (e.g., counter down while the Shellys keep reporting).
+function envTimeSpan(mins) {
+  const firsts = [], lasts = [];
+  if (LIVE_TS.length) { firsts.push(LIVE_TS[0]); lasts.push(LIVE_TS[LIVE_TS.length - 1]); }
+  _SENS.forEach(function (s) {
+    if (s.ts.length) { firsts.push(s.ts[0]); lasts.push(s.ts[s.ts.length - 1]); }
+  });
+  if (!lasts.length) return null;
+  const right = lasts.reduce((a, b) => _parseDate(a) > _parseDate(b) ? a : b);
+  const left  = mins
+    ? _toLocalStr(new Date(_parseDate(right).getTime() - mins * 60000))
+    : firsts.reduce((a, b) => _parseDate(a) < _parseDate(b) ? a : b);
+  return { left: left, right: right };
+}
+
+// One Wong-family color per location — the counter keeps its vermillion/blue
+// pair. Temp = filled circle on the left axis, RH = open diamond on the right;
+// the 5th color is Tol muted wine (readable in both themes). Legend clicks
+// toggle each trace individually, same as the counter traces.
+const SENSOR_ENV_COLORS = ['#009E73', '#CC79A7', '#56B4E9', '#E69F00', '#882255'];
+
+function sensorEnvTraces(mins, binMs) {
+  const traces = [];
+  _SENS.forEach(function (s, si) {
+    const col  = _traceColor(SENSOR_ENV_COLORS[si % SENSOR_ENV_COLORS.length]);
+    const i0   = sliceIdxForArray(s.ts, mins);
+    const tBin = binByTime(s.ts.slice(i0), s.temp.slice(i0), binMs);
+    const hBin = binByTime(s.ts.slice(i0), s.rh.slice(i0),   binMs);
+    traces.push({ x: tBin.x, y: tBin.y, name: s.name + ' T',
+      type: 'scatter', mode: 'markers',
+      marker: { color: col, size: 5 }, yaxis: 'y' });
+    traces.push({ x: hBin.x, y: hBin.y, name: s.name + ' RH',
+      type: 'scatter', mode: 'markers',
+      marker: { color: col, size: 6, symbol: 'diamond-open' }, yaxis: 'y2' });
+  });
+  return traces;
 }
 
 function getLeftBound(divId, mins) {
@@ -427,16 +476,16 @@ function filterAndRender() {
   // ── Environment chart (temperature + humidity) ────────────────────────────
   // TEMP_Y_RANGE / RH_Y_RANGE are pre-computed from the full dataset so neither
   // axis jumps when the time window changes.
-  const livei    = sliceIdxForArray(LIVE_TS, mins);
-  const envBounds = LIVE_TS.length > livei ? { maxallowed: LIVE_TS[LIVE_TS.length - 1] } : {};
-  const envRange  = LIVE_TS.length > livei
-    ? { range: [LIVE_TS[livei], LIVE_TS[LIVE_TS.length - 1]], autorange: false }
+  const livei   = sliceIdxForArray(LIVE_TS, mins);
+  const envSpan = envTimeSpan(mins);
+  const envBounds = envSpan ? { maxallowed: envSpan.right } : {};
+  const envRange  = envSpan
+    ? { range: [envSpan.left, envSpan.right], autorange: false }
     : {};
 
-  // Aggregate the dense ~10 s env data into 5-minute means, then show each bin
-  // as a scatter marker with measurement-uncertainty error bars:
-  //   temperature ±0.36 °F  (= ±0.2 °C instrument spec, converted to °F)
-  //   humidity    ±1 %
+  // Aggregate the dense ~10 s counter env data into 5-minute means shown as
+  // scatter markers. (Error bars were removed when the Shelly sensors joined
+  // this chart — 12 traces with bars was unreadable.)
   const ENV_BIN_MS = 5 * 60 * 1000;   // 5-minute aggregation buckets
   const tempBin = binByTime(LIVE_TS.slice(livei), TEMP_F.slice(livei),  ENV_BIN_MS);
   const rhBin   = binByTime(LIVE_TS.slice(livei), RH_VALS.slice(livei), ENV_BIN_MS);
@@ -449,16 +498,12 @@ function filterAndRender() {
     { x: tempBin.x, y: tempBin.y, name: 'Temperature (°F)',
       type: 'scatter', mode: 'markers',
       marker: { color: tempCol, size: 5 },
-      error_y: { type: 'constant', value: 0.36, color: _rgba(tempCol, 0.7),
-                 thickness: 1, width: 2 },
       yaxis: 'y' },
     { x: rhBin.x, y: rhBin.y, name: 'Humidity (%)',
       type: 'scatter', mode: 'markers',
       marker: { color: rhCol, size: 5 },
-      error_y: { type: 'constant', value: 1, color: _rgba(rhCol, 0.7),
-                 thickness: 1, width: 2 },
       yaxis: 'y2' },
-  ], Object.assign({}, DARK, {
+  ].concat(sensorEnvTraces(mins, ENV_BIN_MS)), Object.assign({}, DARK, {
     margin: { l: 60, r: 70, t: 30, b: 50 },
     xaxis:  Object.assign({}, DARK.xaxis, { title: '' }, envBounds, envRange),
     yaxis:  Object.assign({}, DARK.yaxis, {
