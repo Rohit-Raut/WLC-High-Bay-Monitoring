@@ -217,29 +217,298 @@ function envTimeSpan(mins) {
   return { left: left, right: right };
 }
 
-// Encoding rule for the env chart: COLOR = place, LINE STYLE = quantity —
-// solid line = temperature (left axis), dashed line = humidity (right axis).
-// One Wong-family color per site; the counter keeps its vermillion/blue pair.
-// The 5th color is Tol muted wine (readable in both themes). Legend clicks
-// toggle each trace individually, same as the counter traces.
-const SENSOR_ENV_COLORS = ['#009E73', '#CC79A7', '#56B4E9', '#E69F00', '#882255'];
+// ── Environment section: per-sensor cards (View B) ↔ cohort envelope (View C) ──
+// Sensor 1 = the particle counter's internal sensor; Sensors 2+ = the Shellys
+// (ENV_SENSORS). View B is a card grid: current values + status tag + 28-day
+// sparkline. Clicking a card (or the Cohort segment) swaps in View C: min–max
+// spread band + median line per quantity, with flagged / selected sensors drawn
+// bold in their identity color. State survives the auto-refresh reload.
 
-function sensorEnvTraces(mins, binMs) {
-  const traces = [];
-  _SENS.forEach(function (s, si) {
-    const col  = _traceColor(SENSOR_ENV_COLORS[si % SENSOR_ENV_COLORS.length]);
-    const i0   = sliceIdxForArray(s.ts, mins);
-    const tBin = binByTime(s.ts.slice(i0), s.temp.slice(i0), binMs);
-    const hBin = binByTime(s.ts.slice(i0), s.rh.slice(i0),   binMs);
-    traces.push({ x: tBin.x, y: tBin.y, name: s.name + ' T',
-      type: 'scatter', mode: 'lines',
-      line: { color: col, width: 2 }, yaxis: 'y' });
-    traces.push({ x: hBin.x, y: hBin.y, name: s.name + ' RH',
-      type: 'scatter', mode: 'lines',
-      line: { color: col, width: 2, dash: 'dash' }, yaxis: 'y2' });
+const ENV_BIN_MS    = 5 * 60 * 1000;  // cohort alignment buckets
+const SPARK_BIN_MS  = 2 * 60 * 60 * 1000;  // sparkline buckets (28 d window)
+const SPARK_DAYS    = 28;
+const TEMP_FLAG     = 1.0;   // °F from cohort median → warm / cool
+const RH_FLAG       = 3.5;   // %  from cohort median → humid / dry
+const ENV_STALE_MIN = 30;    // minutes without a report → stale
+
+// Sensor identity colors (Okabe–Ito, colorblind-safe), keyed by sensor number
+// so Sensor 4 keeps its color even while sensors are missing.
+const SITE_COLORS = ['#0072B2', '#E69F00', '#009E73', '#D55E00', '#CC79A7', '#56B4E9'];
+
+const ENV_SITES = (function () {
+  const sites = [];
+  if (LIVE_TS.length) sites.push({ name: 'Sensor 1', ts: LIVE_TS, temp: TEMP_F, rh: RH_VALS });
+  _SENS.forEach(function (s) { sites.push({ name: s.name, ts: s.ts, temp: s.temp, rh: s.rh }); });
+  return sites;
+})();
+
+function siteColor(site, idx) {
+  const m = /(\d+)\s*$/.exec(site.name);
+  const n = m ? parseInt(m[1], 10) - 1 : idx;
+  return SITE_COLORS[((n % 6) + 6) % 6];
+}
+function _lastVal(arr) {
+  for (let k = arr.length - 1; k >= 0; k--)
+    if (arr[k] !== null && !isNaN(arr[k])) return arr[k];
+  return null;
+}
+function _median(a) {
+  const s = a.slice().sort(function (x, y) { return x - y; });
+  const n = s.length;
+  return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null;
+}
+
+// Latest reading + status per site. Status is RELATIVE to the cohort median of
+// the live sensors (no hardware spec band exists): warm/cool by temperature
+// first, else humid/dry by RH, else nominal. Silent >30 min → stale.
+function envStatuses() {
+  const span  = envTimeSpan(0);
+  const nowMs = span ? _parseDate(span.right).getTime() : Date.now();
+  const infos = ENV_SITES.map(function (s, i) {
+    const lastTs = s.ts.length ? _parseDate(s.ts[s.ts.length - 1]).getTime() : 0;
+    return { site: s, idx: i, color: siteColor(s, i),
+             t: _lastVal(s.temp), h: _lastVal(s.rh),
+             stale: !s.ts.length || nowMs - lastTs > ENV_STALE_MIN * 60000 };
   });
+  const live = infos.filter(function (x) { return !x.stale; });
+  const medT = _median(live.map(function (x) { return x.t; }).filter(function (v) { return v !== null; }));
+  const medH = _median(live.map(function (x) { return x.h; }).filter(function (v) { return v !== null; }));
+  infos.forEach(function (x) {
+    if (x.stale) { x.tag = 'stale'; x.cls = 'stale'; x.flag = false; return; }
+    const dT = x.t !== null && medT !== null ? x.t - medT : 0;
+    const dH = x.h !== null && medH !== null ? x.h - medH : 0;
+    if      (dT >  TEMP_FLAG) { x.tag = 'warm ▲';  x.cls = 'warm';  x.flag = true; }
+    else if (dT < -TEMP_FLAG) { x.tag = 'cool ▼';  x.cls = 'cool';  x.flag = true; }
+    else if (dH >  RH_FLAG)   { x.tag = 'humid ▲'; x.cls = 'humid'; x.flag = true; }
+    else if (dH < -RH_FLAG)   { x.tag = 'dry ▼';   x.cls = 'dry';   x.flag = true; }
+    else                      { x.tag = 'nominal';      x.cls = 'ok';    x.flag = false; }
+  });
+  return infos;
+}
+
+// ── View B: cards with dual sparklines ───────────────────────────────────────
+// Each sparkline series is auto-scaled to its OWN min/max (a single sensor's
+// temp only moves ~1 °F — a shared range would flatten it to a line).
+function _sparkSeries(ts, vals, i0, fromMs, toMs, y0, y1) {
+  const bin = binByTime(ts.slice(i0), vals.slice(i0), SPARK_BIN_MS);
+  const pts = [];
+  for (let k = 0; k < bin.x.length; k++) {
+    const t = _parseDate(bin.x[k]).getTime();
+    if (t >= fromMs && t <= toMs) pts.push([t, bin.y[k]]);
+  }
+  if (pts.length < 2) return '';
+  let lo = Infinity, hi = -Infinity;
+  pts.forEach(function (p) { if (p[1] < lo) lo = p[1]; if (p[1] > hi) hi = p[1]; });
+  if (hi - lo < 1e-9) { hi += 0.5; lo -= 0.5; }
+  const X = function (t) { return ((t - fromMs) / (toMs - fromMs) * 100).toFixed(2); };
+  const Y = function (v) { return (y0 + (1 - (v - lo) / (hi - lo)) * (y1 - y0)).toFixed(2); };
+  let d = '';
+  pts.forEach(function (p, k) { d += (k ? 'L' : 'M') + X(p[0]) + ',' + Y(p[1]); });
+  const end = pts[pts.length - 1];
+  return { d: d, ex: X(end[0]), ey: Y(end[1]) };
+}
+function _sparkSvg(site) {
+  const last  = site.ts.length ? _parseDate(site.ts[site.ts.length - 1]).getTime() : Date.now();
+  const first = site.ts.length ? _parseDate(site.ts[0]).getTime() : last;
+  // up to SPARK_DAYS of history, but never wider than the data actually spans —
+  // a young sensor's trace should fill the sparkline, not hide at its edge
+  const fromMs = Math.max(last - SPARK_DAYS * 86400000, first);
+  const t = _sparkSeries(site.ts, site.temp, 0, fromMs, last, 2, 32);
+  const h = _sparkSeries(site.ts, site.rh,   0, fromMs, last, 2, 32);
+  let svg = '<svg class="env-spark" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true">';
+  if (h) svg += '<path class="sh" d="' + h.d + '"/><circle class="dh" cx="' + h.ex + '" cy="' + h.ey + '" r="1.6"/>';
+  if (t) svg += '<path class="st" d="' + t.d + '"/><circle class="dt" cx="' + t.ex + '" cy="' + t.ey + '" r="1.6"/>';
+  return svg + '</svg>';
+}
+function renderEnvCards() {
+  const box = document.getElementById('env-cards');
+  if (!box) return;
+  box.innerHTML = envStatuses().map(function (x) {
+    const tv = x.t !== null ? x.t.toFixed(1) : '—';
+    const hv = x.h !== null ? x.h.toFixed(0) : '—';
+    return '<div class="env-card' + (x.stale ? ' dead' : '') + '" data-site="' + x.site.name +
+      '" role="button" tabindex="0" aria-label="' + x.site.name + ' detail">' +
+      '<div class="env-card-head"><span class="env-dot" style="background:' +
+        _traceColor(x.color) + '"></span>' +
+      '<span class="env-card-name">' + x.site.name + '</span>' +
+      '<span class="env-tag ' + x.cls + '">' + x.tag + '</span></div>' +
+      '<div class="env-card-vals"><span class="vt">' + tv + '<span class="u">°F</span></span>' +
+      '<span class="vh">' + hv + '<span class="u">%</span></span></div>' +
+      _sparkSvg(x.site) + '</div>';
+  }).join('');
+}
+
+// ── View C: cohort envelope (spread band + median + bold flagged/selected) ──
+function _binMap(ts, vals, i0, binMs, leftMs) {
+  const acc = new Map();
+  for (let k = i0; k < ts.length; k++) {
+    const v = vals[k];
+    if (v === null || v === undefined || isNaN(v)) continue;
+    const t = _parseDate(ts[k]).getTime();
+    if (isNaN(t) || (leftMs && t < leftMs)) continue;   // clip to visible window
+    const key = Math.floor(t / binMs) * binMs;
+    let b = acc.get(key);
+    if (!b) { b = { s: 0, n: 0 }; acc.set(key, b); }
+    b.s += v; b.n += 1;
+  }
+  const out = new Map();
+  acc.forEach(function (b, k) { out.set(k, b.s / b.n); });
+  return out;
+}
+// Cohort bins are coarser than the Shellys' ~6 min staggered cadence so every
+// bin holds (nearly) all sensors — 5 min bins made the "median" hop from
+// sensor to sensor. Gaps: a key jump > 3 bins inserts a null so Plotly BREAKS
+// the line instead of bridging days of missing data (honest-gaps rule); the
+// band/median additionally require ≥2 sensors in the bin.
+const COHORT_BIN_MS = 15 * 60 * 1000;
+const COHORT_GAP_MS = 3 * COHORT_BIN_MS;
+
+function _cohortTraces(infos, field, yaxis, mins, isLight, leftMs) {
+  const maps = infos.map(function (x) {
+    const i0 = sliceIdxForArray(x.site.ts, mins);
+    return _binMap(x.site.ts, x.site[field], i0, COHORT_BIN_MS, leftMs);
+  });
+  const keySet = new Set();
+  maps.forEach(function (m) { m.forEach(function (_, k) { keySet.add(k); }); });
+  const keys = Array.from(keySet).sort(function (a, b) { return a - b; });
+  const kx = function (k) { return _toLocalStr(new Date(k + COHORT_BIN_MS / 2)); };
+
+  const x = [], lo = [], hi = [], med = [];
+  let prevK = null;
+  keys.forEach(function (k) {
+    if (prevK !== null && k - prevK > COHORT_GAP_MS) {   // break the line
+      x.push(kx(prevK + COHORT_BIN_MS)); lo.push(null); hi.push(null); med.push(null);
+    }
+    prevK = k;
+    const vals = [];
+    maps.forEach(function (m) { if (m.has(k)) vals.push(m.get(k)); });
+    x.push(kx(k));
+    if (vals.length < 2) { lo.push(null); hi.push(null); med.push(null); return; }
+    lo.push(Math.min.apply(null, vals));
+    hi.push(Math.max.apply(null, vals));
+    med.push(_median(vals));
+  });
+  const traces = [
+    { x: x, y: hi, yaxis: yaxis, type: 'scatter', mode: 'lines',
+      line: { width: 0 }, hoverinfo: 'skip', showlegend: false },
+    { x: x, y: lo, yaxis: yaxis, type: 'scatter', mode: 'lines',
+      line: { width: 0 }, fill: 'tonexty', fillcolor: 'rgba(96,105,117,0.22)',
+      hoverinfo: 'skip', showlegend: false },
+  ];
+  // faint per-site context lines inside the band (bold = flagged / selected),
+  // each broken at its own reporting gaps
+  infos.forEach(function (xi, si) {
+    const m = maps[si], sx = [], sy = [];
+    let pk = null;
+    keys.forEach(function (k) {
+      if (!m.has(k)) return;
+      if (pk !== null && k - pk > COHORT_GAP_MS) { sx.push(kx(pk + COHORT_BIN_MS)); sy.push(null); }
+      pk = k;
+      sx.push(kx(k)); sy.push(m.get(k));
+    });
+    if (!sx.length) return;
+    traces.push({ x: sx, y: sy, yaxis: yaxis, type: 'scatter', mode: 'lines',
+      name: xi.site.name, showlegend: false,
+      hovertemplate: xi.site.name + ' %{y:.1f}' + (field === 'temp' ? ' °F' : ' %') + '<extra></extra>',
+      line: xi.bold ? { color: _traceColor(xi.color), width: 2.5 }
+                    : { color: 'rgba(139,148,158,0.35)', width: 1 } });
+  });
+  traces.push({ x: x, y: med, yaxis: yaxis, type: 'scatter', mode: 'lines',
+    name: 'median', showlegend: false,
+    hovertemplate: 'median %{y:.1f}' + (field === 'temp' ? ' °F' : ' %') + '<extra></extra>',
+    line: { color: isLight ? '#2a2f36' : '#c9d1d9', width: 2 } });
   return traces;
 }
+function renderEnvCohort(mins, DARK) {
+  const infos = envStatuses();
+  // bold = the card the user drilled into, else every flagged sensor
+  infos.forEach(function (x) {
+    x.bold = _envHighlight ? x.site.name === _envHighlight : x.flag;
+  });
+  const isLight = _isLightTheme();
+  const span     = envTimeSpan(mins);
+  const envRange = span ? { range: [span.left, span.right], autorange: false } : {};
+  const leftMs   = span ? _parseDate(span.left).getTime() : 0;
+  const traces = _cohortTraces(infos, 'temp', 'y', mins, isLight, leftMs)
+         .concat(_cohortTraces(infos, 'rh',   'y2', mins, isLight, leftMs));
+  return Plotly.react('chart-env', traces, Object.assign({}, DARK, {
+    margin: { l: 60, r: 30, t: 26, b: 40 },
+    showlegend: false,
+    xaxis:  Object.assign({}, DARK.xaxis, { title: '', anchor: 'y2' },
+                          span ? { maxallowed: span.right } : {}, envRange),
+    yaxis:  Object.assign({}, DARK.yaxis, {
+      title: 'Temperature (°F)', domain: [0.58, 1], fixedrange: true }),
+    yaxis2: Object.assign({}, DARK.yaxis, {
+      title: 'Humidity (%)', domain: [0, 0.44], fixedrange: true }),
+  }), PLOTLY_CFG);
+}
+function renderEnvChips() {
+  const box = document.getElementById('env-chips');
+  if (!box) return;
+  box.innerHTML = envStatuses().map(function (x) {
+    const sel = _envHighlight === x.site.name;
+    const tv = x.t !== null ? x.t.toFixed(1) + '°' : '—';
+    const hv = x.h !== null ? x.h.toFixed(0) + '%' : '—';
+    return '<button class="env-chip' + (sel ? ' sel' : '') + '" data-site="' + x.site.name + '">' +
+      '<span class="env-dot" style="background:' + _traceColor(x.color) + '"></span>' +
+      '<b>S' + (x.site.name.replace(/\D+/g, '') || '?') + '</b> ' + tv + '/' + hv +
+      ' <span class="env-tag ' + x.cls + '">' + x.tag + '</span></button>';
+  }).join('');
+}
+
+// ── View state + dispatcher (state survives the auto-refresh page reload) ──
+var _envView      = sessionStorage.getItem('wlc-env-view') === 'cohort' ? 'cohort' : 'cards';
+var _envHighlight = sessionStorage.getItem('wlc-env-hl') || null;
+
+function _setEnvView(view, highlight) {
+  _envView = view;
+  if (highlight !== undefined) _envHighlight = highlight;
+  sessionStorage.setItem('wlc-env-view', _envView);
+  sessionStorage.setItem('wlc-env-hl', _envHighlight || '');
+  filterAndRender();
+}
+function renderEnv(mins, DARK) {
+  const cards = document.getElementById('env-cards');
+  const chart = document.getElementById('chart-env');
+  if (!cards || !chart) return Promise.resolve();   // stale/foreign markup — skip
+  const chips  = document.getElementById('env-chips');
+  const legend = document.getElementById('env-legend');
+  const cohort = _envView === 'cohort';
+  cards.style.display = cohort ? 'none' : 'grid';
+  chart.style.display = cohort ? 'block' : 'none';
+  if (chips)  chips.style.display  = cohort ? 'flex' : 'none';
+  if (legend) legend.style.display = cohort ? 'none' : 'flex';
+  const bCards  = document.getElementById('env-btn-cards');
+  const bCohort = document.getElementById('env-btn-cohort');
+  if (bCards)  bCards.setAttribute('aria-pressed', String(!cohort));
+  if (bCohort) bCohort.setAttribute('aria-pressed', String(cohort));
+  if (cohort) { renderEnvChips(); return renderEnvCohort(mins, DARK); }
+  renderEnvCards();
+  return Promise.resolve();
+}
+(function _wireEnvViews() {
+  const bCards  = document.getElementById('env-btn-cards');
+  const bCohort = document.getElementById('env-btn-cohort');
+  const cards   = document.getElementById('env-cards');
+  const chips   = document.getElementById('env-chips');
+  if (!cards) return;
+  if (bCards)  bCards.addEventListener('click', function () { _setEnvView('cards'); });
+  if (bCohort) bCohort.addEventListener('click', function () { _setEnvView('cohort'); });
+  cards.addEventListener('click', function (e) {
+    const c = e.target.closest('.env-card');
+    if (c && !c.classList.contains('dead')) _setEnvView('cohort', c.dataset.site);
+  });
+  cards.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const c = e.target.closest('.env-card');
+    if (c && !c.classList.contains('dead')) { e.preventDefault(); _setEnvView('cohort', c.dataset.site); }
+  });
+  if (chips) chips.addEventListener('click', function (e) {
+    const c = e.target.closest('.env-chip');
+    if (!c) return;
+    _setEnvView('cohort', _envHighlight === c.dataset.site ? null : c.dataset.site);
+  });
+})();
 
 function getLeftBound(divId, mins) {
   const tsArray = (divId === 'chart-env') ? LIVE_TS : TS;
@@ -500,53 +769,10 @@ function filterAndRender() {
       }),
     }), PLOTLY_CFG);
 
-  // ── Environment chart (temperature + humidity) ────────────────────────────
-  // TEMP_Y_RANGE / RH_Y_RANGE are pre-computed from the full dataset so neither
-  // axis jumps when the time window changes.
-  const livei   = sliceIdxForArray(LIVE_TS, mins);
-  const envSpan = envTimeSpan(mins);
-  const envBounds = envSpan ? { maxallowed: envSpan.right } : {};
-  const envRange  = envSpan
-    ? { range: [envSpan.left, envSpan.right], autorange: false }
-    : {};
-
-  // Aggregate the dense ~10 s counter env data into 5-minute means shown as
-  // scatter markers. (Error bars were removed when the Shelly sensors joined
-  // this chart — 12 traces with bars was unreadable.)
-  const ENV_BIN_MS = 5 * 60 * 1000;   // 5-minute aggregation buckets
-  const tempBin = binByTime(LIVE_TS.slice(livei), TEMP_F.slice(livei),  ENV_BIN_MS);
-  const rhBin   = binByTime(LIVE_TS.slice(livei), RH_VALS.slice(livei), ENV_BIN_MS);
-
-  // Temperature = vermillion family, humidity = blue family; _traceColor()
-  // swaps in the darker light-mode variant of each on white backgrounds.
-  const tempCol = _traceColor('#D55E00');
-  const rhCol   = _traceColor('#0072B2');
-  const p4 = Plotly.react('chart-env', [
-    { x: tempBin.x, y: tempBin.y, name: 'Temperature (°F)',
-      type: 'scatter', mode: 'lines',
-      line: { color: tempCol, width: 2 },
-      yaxis: 'y' },
-    { x: rhBin.x, y: rhBin.y, name: 'Humidity (%)',
-      type: 'scatter', mode: 'lines',
-      line: { color: rhCol, width: 2, dash: 'dash' },
-      yaxis: 'y2' },
-  ].concat(sensorEnvTraces(mins, ENV_BIN_MS)), Object.assign({}, DARK, {
-    margin: { l: 60, r: 70, t: 30, b: 50 },
-    xaxis:  Object.assign({}, DARK.xaxis, { title: '' }, envBounds, envRange),
-    yaxis:  Object.assign({}, DARK.yaxis, {
-      title:      'Temperature (°F)',
-      autorange:  false,
-      range:      TEMP_Y_RANGE,
-      fixedrange: true,
-    }),
-    yaxis2: Object.assign({}, DARK.yaxis, {
-      title:      { text: 'Humidity (%)', standoff: 15 },
-      overlaying: 'y', side: 'right',
-      autorange:  false,
-      range:      RH_Y_RANGE,
-      fixedrange: true,
-    }),
-  }), PLOTLY_CFG);
+  // ── Environment section: sensor cards (View B) or cohort envelope (View C).
+  // All rendering lives in renderEnv() above; it no-ops on markup it doesn't
+  // recognize so a stale generated page can't throw here.
+  const p4 = renderEnv(mins, DARK);
 
   updateStats(i);
 

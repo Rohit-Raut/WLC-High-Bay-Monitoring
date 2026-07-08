@@ -900,6 +900,28 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         '</div>'
     ) if local else ''
 
+    # Environment panel — LOCAL gets the per-sensor card grid (View B) with a
+    # click-through cohort view (View C); PUBLIC keeps the classic single chart.
+    # Sensor 1 = the particle counter's internal sensor; Sensors 2+ = Shellys.
+    env_panel_html = ((
+        '<div class="chart-title-row">\n'
+        '      <div class="chart-title">Temperature &amp; Humidity</div>\n'
+        '      <div class="env-seg" role="group" aria-label="Environment view">\n'
+        '        <button id="env-btn-cards" aria-pressed="true">Per-sensor</button>\n'
+        '        <button id="env-btn-cohort" aria-pressed="false">Cohort</button>\n'
+        '      </div>\n'
+        '    </div>\n'
+        '    <div class="env-legend" id="env-legend">'
+        '<span class="lt">&#9473; Temperature</span>'
+        '<span class="lh">&#9473; Humidity</span></div>\n'
+        '    <div id="env-cards" class="env-cards"></div>\n'
+        '    <div id="env-chips" class="env-chips" style="display:none"></div>\n'
+        '    <div id="chart-env" style="height:560px; display:none"></div>'
+    ) if local else (
+        '<div class="chart-title">Temperature &amp; Humidity Over Time</div>\n'
+        '    <div id="chart-env" style="height:280px"></div>'
+    ))
+
     # Custom time range modal (local only)
     custom_range_modal_html = '''
     <!-- Custom Time Range Modal (LOCAL ONLY) -->
@@ -1496,12 +1518,72 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     body.fit .row2 {{ flex: 1 1 0; min-height: 0; margin-bottom: 0; }}
     body.fit .row2 .chart-panel {{ flex: 1 1 0; }}
   }}
+  /* ── env sensor cards + cohort view (LOCAL only — public lacks the markup) ── */
+  .chart-title-row {{ display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-bottom: 8px; }}
+  .chart-title-row .chart-title {{ margin-bottom: 0; }}
+  .env-seg {{ display: flex; border: 1px solid var(--border-color); border-radius: 6px;
+    overflow: hidden; flex: none; }}
+  .env-seg button {{ background: var(--bg-card-alt); border: 0; color: var(--text-secondary);
+    font-family: inherit; font-size: 11.5px; padding: 5px 12px; cursor: pointer; }}
+  .env-seg button + button {{ border-left: 1px solid var(--border-color); }}
+  .env-seg button[aria-pressed="true"] {{ background: var(--accent-yale); color: #fff;
+    font-weight: 700; }}
+  .env-legend {{ display: flex; gap: 18px; font-size: 11.5px; color: var(--text-secondary);
+    margin: 0 2px 10px; }}
+  .env-legend .lt {{ color: #D55E00; }}  .env-legend .lh {{ color: #0072B2; }}
+  [data-theme="light"] .env-legend .lt {{ color: #BC4C00; }}
+  [data-theme="light"] .env-legend .lh {{ color: #0550AE; }}
+  .env-cards {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }}
+  .env-card {{ background: var(--bg-card-alt); border: 1px solid var(--border-color);
+    border-radius: 8px; padding: 10px 12px 8px; cursor: pointer;
+    transition: border-color .15s; }}
+  .env-card:hover, .env-card:focus-visible {{ border-color: var(--accent-yale-light);
+    outline: none; }}
+  .env-card.dead {{ opacity: .55; cursor: default; }}
+  .env-card-head {{ display: flex; align-items: center; gap: 7px; }}
+  .env-dot {{ width: 9px; height: 9px; border-radius: 50%; flex: none; }}
+  .env-card-name {{ font-size: 12.5px; font-weight: 700; flex: 1;
+    color: var(--text-primary); }}
+  .env-tag {{ font-size: 10.5px; font-weight: 700; letter-spacing: .4px; }}
+  .env-tag.ok {{ color: var(--status-ok); }}
+  .env-tag.warm {{ color: #D55E00; }}   .env-tag.dry {{ color: #E69F00; }}
+  .env-tag.cool, .env-tag.humid {{ color: #58a6ff; }}
+  .env-tag.stale {{ color: var(--text-secondary); }}
+  [data-theme="light"] .env-tag.warm {{ color: #BC4C00; }}
+  [data-theme="light"] .env-tag.dry {{ color: #9A6700; }}
+  [data-theme="light"] .env-tag.cool, [data-theme="light"] .env-tag.humid {{ color: #0550AE; }}
+  .env-card-vals {{ margin: 7px 0 5px; font-size: 21px; font-weight: 700; }}
+  .env-card-vals .vt {{ color: #D55E00; }}
+  .env-card-vals .vh {{ color: #0072B2; margin-left: 14px; }}
+  [data-theme="light"] .env-card-vals .vt {{ color: #BC4C00; }}
+  [data-theme="light"] .env-card-vals .vh {{ color: #0550AE; }}
+  .env-card-vals .u {{ font-size: 11px; font-weight: 400; color: var(--text-secondary);
+    text-transform: none; }}
+  .env-spark {{ width: 100%; height: 34px; display: block; }}
+  .env-spark path {{ fill: none; stroke-width: 1.4; vector-effect: non-scaling-stroke; }}
+  .env-spark .st {{ stroke: #D55E00; }}  .env-spark .sh {{ stroke: #0072B2; }}
+  .env-spark .dt {{ fill: #D55E00; }}    .env-spark .dh {{ fill: #0072B2; }}
+  [data-theme="light"] .env-spark .st {{ stroke: #BC4C00; }}
+  [data-theme="light"] .env-spark .sh {{ stroke: #0550AE; }}
+  [data-theme="light"] .env-spark .dt {{ fill: #BC4C00; }}
+  [data-theme="light"] .env-spark .dh {{ fill: #0550AE; }}
+  .env-chips {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }}
+  .env-chip {{ display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg-card-alt); border: 1px solid var(--border-color);
+    border-radius: 14px; padding: 4px 10px; font-size: 11.5px; cursor: pointer;
+    color: var(--text-secondary); font-family: inherit; }}
+  .env-chip b {{ color: var(--text-primary); font-weight: 700; }}
+  .env-chip.sel {{ border-color: var(--accent-yale-light);
+    box-shadow: 0 0 0 1px var(--accent-yale-light); }}
+  @media (max-width: 900px) {{ .env-cards {{ grid-template-columns: repeat(2, 1fr); }} }}
   /* ── mobile ───────────────────────────────────────────────────────────── */
   @media (max-width: 640px) {{
     body {{ padding: 14px 14px 30px; }}
     .header {{ margin: -14px -14px 16px; padding: 12px 14px; }}
     .header h1 {{ font-size: 15px; }}
     .row2 {{ flex-direction: column; }}
+    .env-cards {{ grid-template-columns: 1fr; }}
   }}
 </style>
 </head>
@@ -1553,8 +1635,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     <div id="chart-dist" style="height:280px"></div>
   </div>
   <div class="chart-panel">
-    <div class="chart-title">Temperature &amp; Humidity Over Time</div>
-    <div id="chart-env" style="height:280px"></div>
+    {env_panel_html}
   </div>
 </div>
 
