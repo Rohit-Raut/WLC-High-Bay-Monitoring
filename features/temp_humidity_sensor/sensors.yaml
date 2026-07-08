@@ -1,0 +1,28 @@
+# Local sensor config for shelly_ht_logger.py — sensor and location are
+# synonymous here; the label is what lands in the csv's Location column.
+# IPs noted for reference (device web UI: http://<ip>).
+
+broker: broker.hivemq.com
+port: 1883
+username: null
+password: null
+
+# single combined csv all sensors append to
+output_csv: /project/dune/slow_control/temp_humidity/temp_humidity.csv
+
+sensors:
+  ht-1:                                  # not working yet — placeholder
+    prefix: shellyhtg3-REPLACE_ME_1
+    label: "Sensor 1"
+  ht-2:                                  # IP 10.67.67.96
+    prefix: shellyhtg3-d885ac14bad4
+    label: "Sensor 2"
+  ht-3:                                  # IP 10.67.65.129
+    prefix: shellyhtg3-d885ac1345e0
+    label: "Sensor 3"
+  ht-4:                                  # IP 10.67.65.68
+    prefix: shellyhtg3-80b54e3943dc
+    label: "Sensor 4"
+  ht-5:                                  # IP 10.67.77.54
+    prefix: shellyhtg3-d885ac1495c4
+    label: "Sensor 5"

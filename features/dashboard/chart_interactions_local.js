@@ -217,9 +217,10 @@ function envTimeSpan(mins) {
   return { left: left, right: right };
 }
 
-// One Wong-family color per location — the counter keeps its vermillion/blue
-// pair. Temp = filled circle on the left axis, RH = open diamond on the right;
-// the 5th color is Tol muted wine (readable in both themes). Legend clicks
+// Encoding rule for the env chart: COLOR = place, LINE STYLE = quantity —
+// solid line = temperature (left axis), dashed line = humidity (right axis).
+// One Wong-family color per site; the counter keeps its vermillion/blue pair.
+// The 5th color is Tol muted wine (readable in both themes). Legend clicks
 // toggle each trace individually, same as the counter traces.
 const SENSOR_ENV_COLORS = ['#009E73', '#CC79A7', '#56B4E9', '#E69F00', '#882255'];
 
@@ -231,11 +232,11 @@ function sensorEnvTraces(mins, binMs) {
     const tBin = binByTime(s.ts.slice(i0), s.temp.slice(i0), binMs);
     const hBin = binByTime(s.ts.slice(i0), s.rh.slice(i0),   binMs);
     traces.push({ x: tBin.x, y: tBin.y, name: s.name + ' T',
-      type: 'scatter', mode: 'markers',
-      marker: { color: col, size: 5 }, yaxis: 'y' });
+      type: 'scatter', mode: 'lines',
+      line: { color: col, width: 2 }, yaxis: 'y' });
     traces.push({ x: hBin.x, y: hBin.y, name: s.name + ' RH',
-      type: 'scatter', mode: 'markers',
-      marker: { color: col, size: 6, symbol: 'diamond-open' }, yaxis: 'y2' });
+      type: 'scatter', mode: 'lines',
+      line: { color: col, width: 2, dash: 'dash' }, yaxis: 'y2' });
   });
   return traces;
 }
@@ -522,12 +523,12 @@ function filterAndRender() {
   const rhCol   = _traceColor('#0072B2');
   const p4 = Plotly.react('chart-env', [
     { x: tempBin.x, y: tempBin.y, name: 'Temperature (°F)',
-      type: 'scatter', mode: 'markers',
-      marker: { color: tempCol, size: 5 },
+      type: 'scatter', mode: 'lines',
+      line: { color: tempCol, width: 2 },
       yaxis: 'y' },
     { x: rhBin.x, y: rhBin.y, name: 'Humidity (%)',
-      type: 'scatter', mode: 'markers',
-      marker: { color: rhCol, size: 5 },
+      type: 'scatter', mode: 'lines',
+      line: { color: rhCol, width: 2, dash: 'dash' },
       yaxis: 'y2' },
   ].concat(sensorEnvTraces(mins, ENV_BIN_MS)), Object.assign({}, DARK, {
     margin: { l: 60, r: 70, t: 30, b: 50 },

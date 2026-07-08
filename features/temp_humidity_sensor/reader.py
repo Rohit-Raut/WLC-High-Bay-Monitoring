@@ -64,7 +64,9 @@ def load_sensor_series(days=None, csv_path=None):
     for loc in sorted(by_loc):
         rows = sorted(by_loc[loc], key=lambda r: r[0])   # chronological per location
         out.append({
-            'name': loc,
+            # display name only — csv Location values stay as logged, so the
+            # rename doesn't split historical series
+            'name': loc.replace('Sensor', 'Site'),
             'ts':   [r[0].strftime('%Y-%m-%d %H:%M:%S') for r in rows],
             'temp': [r[1] for r in rows],
             'rh':   [r[2] for r in rows],
