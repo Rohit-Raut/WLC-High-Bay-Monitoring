@@ -222,9 +222,9 @@ function envTimeSpan(mins) {
 }
 
 // ── Environment section: per-sensor cards (View B) ↔ combined chart (View C) ──
-// All sites arrive via ENV_SENSORS (°C): the generator prepends "Sensor 1" =
-// the particle counter's own temp/RH from the measurement archive, followed by
-// the Shellys. View B is a card grid: current values + mini-axis sparkline.
+// All sites arrive via ENV_SENSORS (°C): Sensors 1–5 are the Shellys; the
+// generator appends "Sensor 6" = the particle counter's own temp/RH from the
+// measurement archive. View B is a card grid: current values + mini-axis sparkline.
 // The Cohort segment / a card click swaps in View C: the classic dual-axis
 // chart (temperature left, humidity right, every sensor at once), with the
 // selected sensor emphasized. State survives the auto-refresh reload.

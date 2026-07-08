@@ -837,11 +837,12 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         log(f"WARNING: temp/humidity sensor csv unavailable: {_e}", 'WARN')
         _env_sensors = []
 
-    # LOCAL env section: "Sensor 1" = the particle counter's own temp/RH, taken
-    # from the measurement records (archive rows carry temp_C / RH_pct). All
+    # LOCAL env section: "Sensor 6" = the particle counter's own temp/RH, taken
+    # from the measurement records (archive rows carry temp_C / RH_pct) and
+    # appended after the Shellys (Sensors 1–5) so cards render in order. All
     # sensors report °C, embedded as-is — the local env section displays °C.
     if local:
-        _s1_ts, _s1_t, _s1_h = [], [], []
+        _s6_ts, _s6_t, _s6_h = [], [], []
         for _r in recent:
             _d = (_r.get('date') or '').strip()
             _t = (_r.get('time') or '').strip()
@@ -851,12 +852,12 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
             _rhv = sf(_r.get('RH_pct'))
             if _tc is None or _rhv is None or _rhv <= 1:   # old rows lack real env values
                 continue
-            _s1_ts.append(f'{_d} {_t}')
-            _s1_t.append(_tc)
-            _s1_h.append(_rhv)
-        if _s1_ts:
-            _env_sensors = [{'name': 'Sensor 1', 'ts': _s1_ts,
-                             'temp': _s1_t, 'rh': _s1_h}] + _env_sensors
+            _s6_ts.append(f'{_d} {_t}')
+            _s6_t.append(_tc)
+            _s6_h.append(_rhv)
+        if _s6_ts:
+            _env_sensors = _env_sensors + [{'name': 'Sensor 6', 'ts': _s6_ts,
+                                            'temp': _s6_t, 'rh': _s6_h}]
     env_sensors_js = json.dumps(_env_sensors)
 
     # ISO 14644-1:2015 concentration limits (counts/m³) for the 0.5 µm channel.
@@ -937,7 +938,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         '<span class="lh">&#9473; Humidity</span></div>\n'
         '    <div id="env-cards" class="env-cards"></div>\n'
         '    <div id="env-chips" class="env-chips" style="display:none"></div>\n'
-        '    <div id="chart-env" style="height:440px; display:none"></div>'
+        '    <div id="chart-env" style="height:300px; display:none"></div>'
     ) if local else (
         '<div class="chart-title">Temperature &amp; Humidity Over Time</div>\n'
         '    <div id="chart-env" style="height:280px"></div>'
@@ -1661,7 +1662,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
 <div class="row2">
   <div class="chart-panel">
     <div class="chart-title">Raw Particle Counts by Size &nbsp;(sample at {last_ts} &mdash; log scale)</div>
-    <div id="chart-dist" style="height:280px"></div>
+    <div id="chart-dist" style="height:{'330px' if local else '280px'}"></div>
   </div>
   <div class="chart-panel">
     {env_panel_html}
