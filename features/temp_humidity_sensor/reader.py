@@ -52,6 +52,9 @@ def load_sensor_series(days=None, csv_path=None):
     """Per-location time series, cut to the last `days` days (None = all)."""
     path = csv_path or _configured_csv_path()
     cutoff = datetime.now() - timedelta(days=days) if days is not None else None
+    # legacy Location values (pre-rename rows / not-yet-restarted logger) fold
+    # into the current labels so each location stays one series
+    aliases = _load_cfg().get('aliases') or {}
 
     by_loc = {}
     if os.path.exists(path):
@@ -64,6 +67,7 @@ def load_sensor_series(days=None, csv_path=None):
                     except ValueError:
                         continue
                     loc = (row.get('Location') or '').strip()
+                    loc = aliases.get(loc, loc)
                     if not loc or (cutoff is not None and dt < cutoff):
                         continue
                     by_loc.setdefault(loc, []).append(

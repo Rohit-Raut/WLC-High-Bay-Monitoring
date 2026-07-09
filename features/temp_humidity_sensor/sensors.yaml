@@ -29,3 +29,13 @@ sensors:
   ht-5:                                  # IP 10.67.77.54   (was "Sensor 5")
     prefix: shellyhtg3-d885ac1495c4
     label: "Entrance"
+
+# csv rows written BEFORE the rename (and by a logger that hasn't been
+# restarted yet) carry the old Location values — the dashboard reader merges
+# them into the current labels so each location stays ONE series.
+aliases:
+  "Sensor 1": "CF Prep"
+  "Sensor 2": "CRP Packing"
+  "Sensor 3": "Storage"
+  "Sensor 4": "Coldbox"
+  "Sensor 5": "Entrance"
