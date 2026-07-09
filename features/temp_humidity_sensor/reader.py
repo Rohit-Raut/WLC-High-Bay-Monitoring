@@ -19,14 +19,26 @@ MODULE_DIR  = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CSV = '/project/dune/slow_control/temp_humidity/temp_humidity.csv'
 
 
-def _configured_csv_path():
-    """output_csv from sensors.yaml (same folder as the logger), else default."""
+def _load_cfg():
     try:
         import yaml
         with open(os.path.join(MODULE_DIR, 'sensors.yaml')) as f:
-            return (yaml.safe_load(f) or {}).get('output_csv', DEFAULT_CSV)
+            return yaml.safe_load(f) or {}
     except Exception:
-        return DEFAULT_CSV
+        return {}
+
+
+def _configured_csv_path():
+    """output_csv from sensors.yaml (same folder as the logger), else default."""
+    return _load_cfg().get('output_csv', DEFAULT_CSV)
+
+
+def _configured_labels():
+    """Every label defined in sensors.yaml — a configured sensor that hasn't
+    reported yet must still appear (as an empty series) so the dashboard can
+    show a 'no data' card instead of silently omitting it."""
+    return [(s or {}).get('label') for s in (_load_cfg().get('sensors') or {}).values()
+            if (s or {}).get('label')]
 
 
 def _sf(v):
@@ -39,26 +51,30 @@ def _sf(v):
 def load_sensor_series(days=None, csv_path=None):
     """Per-location time series, cut to the last `days` days (None = all)."""
     path = csv_path or _configured_csv_path()
-    if not os.path.exists(path):
-        return []
     cutoff = datetime.now() - timedelta(days=days) if days is not None else None
 
     by_loc = {}
-    try:
-        with open(path, newline='') as f:
-            for row in csv.DictReader(f):
-                try:
-                    dt = datetime.strptime((row.get('Date and Time') or '').strip(),
-                                           '%Y-%m-%d %H:%M:%S')
-                except ValueError:
-                    continue
-                loc = (row.get('Location') or '').strip()
-                if not loc or (cutoff is not None and dt < cutoff):
-                    continue
-                by_loc.setdefault(loc, []).append(
-                    (dt, _sf(row.get('Temp')), _sf(row.get('Humidity'))))
-    except OSError:
-        return []
+    if os.path.exists(path):
+        try:
+            with open(path, newline='') as f:
+                for row in csv.DictReader(f):
+                    try:
+                        dt = datetime.strptime((row.get('Date and Time') or '').strip(),
+                                               '%Y-%m-%d %H:%M:%S')
+                    except ValueError:
+                        continue
+                    loc = (row.get('Location') or '').strip()
+                    if not loc or (cutoff is not None and dt < cutoff):
+                        continue
+                    by_loc.setdefault(loc, []).append(
+                        (dt, _sf(row.get('Temp')), _sf(row.get('Humidity'))))
+        except OSError:
+            pass
+
+    # configured sensors with no rows yet (or no csv at all) → empty series,
+    # so the dashboard shows a "no data" card instead of silently omitting them
+    for _lbl in _configured_labels():
+        by_loc.setdefault(_lbl, [])
 
     out = []
     for loc in sorted(by_loc):

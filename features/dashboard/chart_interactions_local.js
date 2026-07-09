@@ -265,6 +265,7 @@ function envStatuses() {
     const lastTs = s.ts.length ? _parseDate(s.ts[s.ts.length - 1]).getTime() : 0;
     return { site: s, idx: i, color: siteColor(s, i),
              t: _lastVal(s.temp), h: _lastVal(s.rh),
+             nodata: !s.ts.length,
              stale: !s.ts.length || nowMs - lastTs > ENV_STALE_MIN * 60000 };
   });
 }
@@ -299,6 +300,12 @@ function _sparkTimeLbl(ms) {
   return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 function _sparkHtml(site) {
+  if (!site.ts.length) {   // placeholder keeps the card height, no fake labels
+    return '<div class="env-spark-wrap"><div class="spark-ax ax-t"><span></span><span></span></div>' +
+           '<svg class="env-spark" viewBox="0 0 100 38" aria-hidden="true"></svg>' +
+           '<div class="spark-ax ax-h"><span></span><span></span></div></div>' +
+           '<div class="spark-x"><span></span><span></span></div>';
+  }
   const last  = site.ts.length ? _parseDate(site.ts[site.ts.length - 1]).getTime() : Date.now();
   const first = site.ts.length ? _parseDate(site.ts[0]).getTime() : last;
   // up to SPARK_DAYS of history, but never wider than the data actually spans —
@@ -334,7 +341,8 @@ function renderEnvCards() {
       '<div class="env-card-head"><span class="env-dot" style="background:' +
         _traceColor(x.color) + '"></span>' +
       '<span class="env-card-name">' + x.site.name + '</span>' +
-      (x.stale ? '<span class="env-tag stale">stale</span>' : '') + '</div>' +
+      (x.nodata ? '<span class="env-tag stale">no data yet</span>'
+                : x.stale ? '<span class="env-tag stale">stale</span>' : '') + '</div>' +
       '<div class="env-card-vals"><span class="vt">' + tv + '<span class="u">°C</span></span>' +
       '<span class="vh">' + hv + '<span class="u">%</span></span></div>' +
       _sparkHtml(x.site) + '</div>';
@@ -417,7 +425,8 @@ function renderEnvChips() {
     return '<button class="env-chip' + (sel ? ' sel' : '') + '" data-site="' + x.site.name + '">' +
       '<span class="env-dot" style="background:' + _traceColor(x.color) + '"></span>' +
       '<b>S' + (x.site.name.replace(/\D+/g, '') || '?') + '</b> ' + tv + '/' + hv +
-      (x.stale ? ' <span class="env-tag stale">stale</span>' : '') + '</button>';
+      (x.nodata ? ' <span class="env-tag stale">no data</span>'
+                : x.stale ? ' <span class="env-tag stale">stale</span>' : '') + '</button>';
   }).join('');
 }
 
