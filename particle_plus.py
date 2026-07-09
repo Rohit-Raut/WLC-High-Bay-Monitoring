@@ -837,9 +837,9 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         log(f"WARNING: temp/humidity sensor csv unavailable: {_e}", 'WARN')
         _env_sensors = []
 
-    # LOCAL env section: "Sensor 6" = the particle counter's own temp/RH, taken
+    # LOCAL env section: "Particle Counter" = the counter's own temp/RH, taken
     # from the measurement records (archive rows carry temp_C / RH_pct) and
-    # appended after the Shellys (Sensors 1–5) so cards render in order. All
+    # appended after the five Shelly locations so cards render in order. All
     # sensors report °C, embedded as-is — the local env section displays °C.
     if local:
         _s6_ts, _s6_t, _s6_h = [], [], []
@@ -856,7 +856,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
             _s6_t.append(_tc)
             _s6_h.append(_rhv)
         if _s6_ts:
-            _env_sensors = _env_sensors + [{'name': 'Sensor 6', 'ts': _s6_ts,
+            _env_sensors = _env_sensors + [{'name': 'Particle Counter', 'ts': _s6_ts,
                                             'temp': _s6_t, 'rh': _s6_h}]
     env_sensors_js = json.dumps(_env_sensors)
 

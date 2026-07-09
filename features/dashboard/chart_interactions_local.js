@@ -222,9 +222,10 @@ function envTimeSpan(mins) {
 }
 
 // ── Environment section: per-sensor cards (View B) ↔ combined chart (View C) ──
-// All sites arrive via ENV_SENSORS (°C): Sensors 1–5 are the Shellys; the
-// generator appends "Sensor 6" = the particle counter's own temp/RH from the
-// measurement archive. View B is a card grid: current values + mini-axis sparkline.
+// All sites arrive via ENV_SENSORS (°C): the five Shelly locations (CF Prep,
+// CRP Packing, Storage, Coldbox, Entrance — sensors.yaml order) followed by
+// "Particle Counter" = the counter's own temp/RH from the measurement archive.
+// View B is a card grid: current values + mini-axis sparkline.
 // The Cohort segment / a card click swaps in View C: the classic dual-axis
 // chart (temperature left, humidity right, every sensor at once), with the
 // selected sensor emphasized. State survives the auto-refresh reload.
@@ -233,8 +234,11 @@ const SPARK_BIN_MS  = 2 * 60 * 60 * 1000;  // sparkline buckets (≤28 d window)
 const SPARK_DAYS    = 28;
 const ENV_STALE_MIN = 30;    // minutes without a report → stale
 
-// Sensor identity colors (Okabe–Ito, colorblind-safe), keyed by sensor number
-// so Sensor 4 keeps its color even while sensors are missing.
+// Sensor identity colors (Okabe–Ito, colorblind-safe). Names carry no numbers
+// anymore, so colors follow list position — stable because the reader emits
+// locations in sensors.yaml order (with placeholders for silent sensors) and
+// the counter is always appended last. A trailing digit (legacy "Sensor N"
+// rows) still keys by number.
 const SITE_COLORS = ['#0072B2', '#E69F00', '#009E73', '#D55E00', '#CC79A7', '#56B4E9'];
 
 const ENV_SITES = _SENS.slice();
@@ -424,7 +428,7 @@ function renderEnvChips() {
     const hv = x.h !== null ? x.h.toFixed(0) + '%' : '—';
     return '<button class="env-chip' + (sel ? ' sel' : '') + '" data-site="' + x.site.name + '">' +
       '<span class="env-dot" style="background:' + _traceColor(x.color) + '"></span>' +
-      '<b>S' + (x.site.name.replace(/\D+/g, '') || '?') + '</b> ' + tv + '/' + hv +
+      '<b>' + x.site.name + '</b> ' + tv + '/' + hv +
       (x.nodata ? ' <span class="env-tag stale">no data</span>'
                 : x.stale ? ' <span class="env-tag stale">stale</span>' : '') + '</button>';
   }).join('');
@@ -937,11 +941,12 @@ window._attachZoomOutButtonListeners = function () {
 // "refresh to latest" means re-fetching the page. To keep that smooth:
 //   • the selected time range is preserved across reloads (sessionStorage) so a
 //     refresh — auto or manual — never throws away the user's current zoom,
-//   • the page auto-reloads every 60 s (skipping a cycle while the Alerts panel
-//     is open, so it isn't yanked away mid-read),
+//   • the page auto-reloads every 5 min (skipping a cycle while the Alerts panel
+//     is open, so it isn't yanked away mid-read) — matches the Shellys' ~5 min
+//     reporting cadence and local_serve.py's REGEN_INTERVAL_S,
 //   • a manual refresh button is injected into the header (next to Time Range).
 //     Kept entirely here so particle_plus.py is untouched.
-var AUTO_REFRESH_MS = 60000;
+var AUTO_REFRESH_MS = 5 * 60 * 1000;
 var _refreshTimer   = null;
 
 function _restoreTimeRange() {

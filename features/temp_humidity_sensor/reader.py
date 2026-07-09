@@ -73,11 +73,17 @@ def load_sensor_series(days=None, csv_path=None):
 
     # configured sensors with no rows yet (or no csv at all) → empty series,
     # so the dashboard shows a "no data" card instead of silently omitting them
-    for _lbl in _configured_labels():
+    cfg_labels = _configured_labels()
+    for _lbl in cfg_labels:
         by_loc.setdefault(_lbl, [])
 
+    # sensors.yaml order first (labels are locations, ordered physically),
+    # then any unexpected csv locations (e.g., pre-rename rows) alphabetically
+    ordered = ([l for l in cfg_labels if l in by_loc] +
+               sorted(l for l in by_loc if l not in cfg_labels))
+
     out = []
-    for loc in sorted(by_loc):
+    for loc in ordered:
         rows = sorted(by_loc[loc], key=lambda r: r[0])   # chronological per location
         out.append({
             'name': loc,

@@ -10,21 +10,22 @@ password: null
 # single combined csv all sensors append to
 output_csv: /project/dune/slow_control/temp_humidity/temp_humidity.csv
 
-# Note: "Sensor 6" is reserved for the Particle Plus counter's own temp/RH
-# (added dashboard-side from the measurement archive, not logged here).
+# Labels = physical locations in the High Bay (they land in the csv's Location
+# column). "Particle Counter" is reserved for the Particle Plus counter's own
+# temp/RH (added dashboard-side from the measurement archive, not logged here).
 sensors:
-  ht-1:                                  # IP 10.67.67.202
+  ht-1:                                  # IP 10.67.67.202  (was "Sensor 1")
     prefix: shellyhtg3-80b54e35ba60
-    label: "Sensor 1"
-  ht-2:                                  # IP 10.67.67.96
+    label: "CF Prep"
+  ht-2:                                  # IP 10.67.67.96   (was "Sensor 2")
     prefix: shellyhtg3-d885ac14bad4
-    label: "Sensor 2"
-  ht-3:                                  # IP 10.67.65.129
+    label: "CRP Packing"
+  ht-3:                                  # IP 10.67.65.129  (was "Sensor 3")
     prefix: shellyhtg3-d885ac1345e0
-    label: "Sensor 3"
-  ht-4:                                  # IP 10.67.65.68
+    label: "Storage"
+  ht-4:                                  # IP 10.67.65.68   (was "Sensor 4")
     prefix: shellyhtg3-80b54e3943dc
-    label: "Sensor 4"
-  ht-5:                                  # IP 10.67.77.54
+    label: "Coldbox"
+  ht-5:                                  # IP 10.67.77.54   (was "Sensor 5")
     prefix: shellyhtg3-d885ac1495c4
-    label: "Sensor 5"
+    label: "Entrance"
