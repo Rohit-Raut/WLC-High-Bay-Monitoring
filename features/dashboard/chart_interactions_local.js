@@ -811,27 +811,38 @@ let _zooming = false;
 // direction: -1 = zoom in  (step to smaller time window, decrease selectedIndex)
 //            +1 = zoom out (step to larger time window,  increase selectedIndex)
 //
-// The dropdown options are ordered smallest → largest:
-//   index 0: 30 min  (hard stop — can't zoom in further)
-//   index 1: 1 hr
-//   index 2: 6 hr
-//   index 3: 12 hr
-//   index 4: 24 hr
-//   index 5: 7 days  (hard stop — can't zoom out further)
-//
-// Stepping outside [0, options.length-1] is silently ignored.
+// Stepping walks ONLY the fixed ladder 30 min → 1 hr → 6 hr → 12 hr → 24 hr →
+// 7 days. The local dropdown continues past that (14/30/90 days, All, Custom…)
+// but those are reachable ONLY by picking them manually — stepping out past
+// 7 days used to land on the "Custom…" option, whose value parses to NaN and
+// blew up every chart. From a beyond-the-ladder window (All etc.), zoom-out is
+// a hard no-op and zoom-in re-enters the ladder at 7 days.
 function _stepZoom(direction) {
   if (_zooming) return;
-  const sel      = document.getElementById('sel-range');
-  let newIndex = sel.selectedIndex + direction;
-  
-  // Hard stops: clamp to valid range.
-  // We MUST call filterAndRender() even if already at the limit, because if this
-  // was triggered by a modebar +/- click, Plotly natively zoomed the chart and
-  // we need filterAndRender() to snap it back to our hard limit.
-  if (newIndex < 0) newIndex = 0;
-  if (newIndex >= sel.options.length) newIndex = sel.options.length - 1;
-  
+  const sel = document.getElementById('sel-range');
+
+  // last option on the steppable ladder (largest numeric value ≤ 7 days)
+  const MAX_STEP_MINS = 7 * 24 * 60;
+  let maxIdx = -1;
+  for (let k = 0; k < sel.options.length; k++) {
+    const v = parseInt(sel.options[k].value);
+    if (!isNaN(v) && v > 0 && v <= MAX_STEP_MINS) maxIdx = k;
+  }
+  if (maxIdx < 0) return;
+
+  // We MUST call filterAndRender() even when the selection doesn't change,
+  // because a modebar +/- click already zoomed the chart natively and
+  // filterAndRender() is what snaps it back to the hard limit.
+  const beyond = sel.selectedIndex > maxIdx || isNaN(parseInt(sel.value));
+  let newIndex;
+  if (beyond) {
+    newIndex = direction < 0 ? maxIdx : sel.selectedIndex;   // in → 7 d, out → stay
+  } else {
+    newIndex = sel.selectedIndex + direction;
+    if (newIndex < 0) newIndex = 0;
+    if (newIndex > maxIdx) newIndex = maxIdx;                // hard stop at 7 days
+  }
+
   sel.selectedIndex = newIndex;
   _zooming = true;
   filterAndRender().then(function () {
