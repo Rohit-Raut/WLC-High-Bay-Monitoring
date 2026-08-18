@@ -1,8 +1,6 @@
-# WLC High Bay Monitoring - Configuration Example
-# Copy this file to config.local.yaml and customize for your installation
 
 counter:
-  ip: '10.66.66.68'
+  ip: '10.66.07.169'
   port: 502
   password: ''  # Admin password for RTC sync (empty if not set)
 
