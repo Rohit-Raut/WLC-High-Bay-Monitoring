@@ -5,19 +5,30 @@ WLC High Bay Clean Room - Environmental Alert System
 Reads the latest measurements from the live CSV written by particle_plus.py
 and sends an email alert when any monitored parameter crosses a threshold.
 
-Run this script on a cron schedule (e.g., every 10 minutes):
-    */10 * * * * python3 /home/rraut/particle_plus/features/alerts/alerts.py
+Run from cron — the check every 10 minutes, the summary once a week:
+    */10 * * * * cd /home/rraut/particle_plus && python3 features/alerts/alerts.py
+    0 8 * * 1    cd /home/rraut/particle_plus && python3 features/alerts/alerts.py --weekly-summary
 
-Alert conditions (all configurable below):
-    - Relative humidity < RH_LOW_PCT   (default < 20%, dry air / static risk)
-    - Relative humidity > RH_HIGH_PCT  (default > 90%, condensation / moisture risk)
-    - Temperature < TEMP_LOW_F         (default < 33 degF, abnormal cold)
-    - Temperature > TEMP_HIGH_F        (default > 120 degF, thermal excursion)
-    - Particle count (0.3 µm) > PARTICLE_HIGH_M3 (contamination event)
-    - Counter offline for > OFFLINE_ALERT_MIN minutes
+Alert conditions (thresholds all configurable below). From the counter:
+    - Relative humidity < RH_LOW_PCT or > RH_HIGH_PCT
+    - Temperature < TEMP_LOW_F or > TEMP_HIGH_F
+    - Cumulative >=0.3 µm count > PARTICLE_HIGH_M3 (worse than ISO 9)
+    - No new record for > OFFLINE_ALERT_MIN minutes
+From each distributed Shelly H&T sensor:
+    - Silent for > SENSOR_SILENT_HOURS (flat battery, broker or logger down)
+    - Last reading outside the same temp/RH limits, per location
 
-Email is sent via SMTP (Gmail app password by default). A state file
-prevents repeat alerts; each condition must recover before re-triggering.
+Everything active in one run is sent as ONE digest email, followed by a table
+of current readings from the counter and every sensor: a real HVAC failure
+trips several conditions at once, and one mail showing the whole bay is more
+actionable than four mails each showing a fragment. Cooldowns stay
+per-condition, so a new problem still notifies immediately while another is
+mid-cooldown, and a condition that recovers drops its cooldown so its next
+occurrence is not delayed.
+
+Email goes out over SMTP (Gmail app password by default). Shape of the code:
+gather_readings() reads, evaluate() decides (pure — no I/O, no mail, which is
+what makes the ruleset testable), check_alerts() delivers. See test_alerts.py.
 """
 
 import csv
@@ -220,22 +231,6 @@ def send_test_email():
     return ok
 
 
-def fire(state, key, subject, body, hours=None):
-    """Send one alert if its cooldown has expired; record the time if it went out.
-
-    Same cooldown/state contract the counter checks above use inline — factored
-    out here because the per-location sensor checks would otherwise repeat it
-    once per sensor per condition.
-    """
-    if not cooldown_expired(state, key, hours):
-        log(f"{key} active but cooldown not expired")
-        return False
-    if send_email(subject, body):
-        state[key] = datetime.now().isoformat()
-        return True
-    return False
-
-
 def sensor_series():
     """Per-location Shelly series via the dashboard's own reader (never raises).
 
@@ -281,277 +276,446 @@ def safe_float(val):
         return None
 
 
-def check_alerts():
-    state   = load_state()
-    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    fired   = False
 
+# ── Reading the current state of the lab ─────────────────────────────────────
+
+def _row_dt(row):
+    """Timestamp of a measurement row: date+time, else sync_time. None if neither."""
+    d = (row.get('date') or '').strip()
+    t = (row.get('time') or '').strip()
+    if d and t:
+        try:
+            return datetime.strptime(f"{d} {t}", '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            pass
+    sync = (row.get('sync_time') or '').strip()
+    if sync:
+        try:
+            return datetime.fromisoformat(sync)
+        except ValueError:
+            pass
+    return None
+
+
+def gather_readings():
+    """Everything the checks AND the summary need, read once.
+
+    Keeping this separate from evaluate() means the summary block printed in
+    every email is built from exactly the same numbers the alerts were judged
+    on — the mail can never contradict itself.
+    """
     live = read_latest_live()
     meas = read_latest_measurement()
-
-    # Use live reading for RH and temperature (10-second resolution)
-    # Fall back to latest completed sample if live CSV is unavailable
+    # live.csv for temp/RH (finer cadence); fall back to the last completed sample
     source = live if live is not None else meas
-    if source is None:
-        log("No data available to check.")
-        return
 
-    rh      = safe_float(source.get('RH_pct'))
-    temp_c  = safe_float(source.get('temp_C'))
-    temp_f  = round(temp_c * 9/5 + 32, 1) if temp_c is not None else None
+    r = {'have_data': source is not None, 'rh': None, 'temp_c': None, 'temp_f': None,
+         'ch1_m3': None, 'last_meas_dt': None, 'offline_min': None, 'sensors': []}
 
-    # Particle count from latest completed sample (not live, which is mid-sample).
-    # CUMULATIVE (>= 0.3 µm) count — ISO limits are defined on cumulative counts,
-    # not the differential per-bin ch1_diff_m3.
-    ch1_m3  = safe_float(meas.get('ch1_sum_m3')) if meas else None
+    if source is not None:
+        r['rh']     = safe_float(source.get('RH_pct'))
+        r['temp_c'] = safe_float(source.get('temp_C'))
+        r['temp_f'] = (round(r['temp_c'] * 9 / 5 + 32, 1)
+                       if r['temp_c'] is not None else None)
 
-    # Timestamp of latest measurement to check offline status
-    last_meas_dt = None
     if meas:
-        d = (meas.get('date') or '').strip()
-        t = (meas.get('time') or '').strip()
-        if d and t:
-            try:
-                last_meas_dt = datetime.strptime(f"{d} {t}", '%Y-%m-%d %H:%M:%S')
-            except ValueError:
-                pass
-        if last_meas_dt is None:
-            sync = (meas.get('sync_time') or '').strip()
-            if sync:
-                try:
-                    last_meas_dt = datetime.fromisoformat(sync)
-                except ValueError:
-                    pass
+        # CUMULATIVE >= 0.3 µm count — ISO limits are defined on cumulative
+        # counts, not the differential per-bin ch1_diff_m3. Taken from the last
+        # completed sample, never from live (which may be mid-sample).
+        r['ch1_m3'] = safe_float(meas.get('ch1_sum_m3'))
+        r['last_meas_dt'] = _row_dt(meas)
+        if r['last_meas_dt'] is not None:
+            r['offline_min'] = (datetime.now() - r['last_meas_dt']).total_seconds() / 60
 
-    log(f"Check: RH={rh}%  Temp={temp_f}F  ch1={ch1_m3}/m³  "
-        f"last_meas={last_meas_dt.strftime('%H:%M') if last_meas_dt else 'unknown'}")
-
-    # ── RH LOW ────────────────────────────────────────────────────────────────
-    if rh is not None and rh < RH_LOW_PCT:
-        key = 'rh_low'
-        if cooldown_expired(state, key):
-            body = (
-                f"ALERT: Low Relative Humidity\n\n"
-                f"Current RH:   {rh:.1f}%\n"
-                f"Threshold:    < {RH_LOW_PCT:.0f}%\n\n"
-                f"Low humidity increases static discharge risk, which can damage\n"
-                f"detector components during assembly. Verify clean room HVAC status.\n\n"
-                f"Timestamp:    {now_str}\n"
-                f"Location:     WLC High Bay (Wright Lab, Yale University)\n"
-                f"Instrument:   Particles Plus Model 7301\n"
-            )
-            if send_email(f"LOW HUMIDITY: {rh:.1f}% (threshold {RH_LOW_PCT:.0f}%)", body):
-                state[key] = datetime.now().isoformat()
-                fired = True
-        else:
-            log(f"RH low ({rh:.1f}%) but cooldown active for 'rh_low'")
-    else:
-        # Clear cooldown once condition recovers
-        state.pop('rh_low', None)
-
-    # ── RH HIGH ───────────────────────────────────────────────────────────────
-    if rh is not None and rh > RH_HIGH_PCT:
-        key = 'rh_high'
-        if cooldown_expired(state, key):
-            body = (
-                f"ALERT: High Relative Humidity\n\n"
-                f"Current RH:   {rh:.1f}%\n"
-                f"Threshold:    > {RH_HIGH_PCT:.0f}%\n\n"
-                f"High humidity can cause condensation on detector surfaces and\n"
-                f"increase particle adhesion. Verify clean room HVAC status.\n\n"
-                f"Timestamp:    {now_str}\n"
-                f"Location:     WLC High Bay (Wright Lab, Yale University)\n"
-                f"Instrument:   Particles Plus Model 7301\n"
-            )
-            if send_email(f"HIGH HUMIDITY: {rh:.1f}% (threshold {RH_HIGH_PCT:.0f}%)", body):
-                state[key] = datetime.now().isoformat()
-                fired = True
-        else:
-            log(f"RH high ({rh:.1f}%) but cooldown active for 'rh_high'")
-    else:
-        state.pop('rh_high', None)
-
-    # ── TEMP LOW ──────────────────────────────────────────────────────────────
-    if temp_f is not None and temp_f < TEMP_LOW_F:
-        key = 'temp_low'
-        if cooldown_expired(state, key):
-            body = (
-                f"ALERT: Low Temperature\n\n"
-                f"Current temp: {temp_f:.1f} degF ({temp_c:.1f} degC)\n"
-                f"Threshold:    < {TEMP_LOW_F:.0f} degF\n\n"
-                f"Abnormally low temperature may indicate HVAC failure or\n"
-                f"unintended cold exposure in the clean room. Verify environmental\n"
-                f"controls and check that heating is functioning correctly.\n\n"
-                f"Timestamp:    {now_str}\n"
-                f"Location:     WLC High Bay (Wright Lab, Yale University)\n"
-                f"Instrument:   Particles Plus Model 7301\n"
-            )
-            if send_email(f"LOW TEMPERATURE: {temp_f:.1f}F (threshold {TEMP_LOW_F:.0f}F)", body):
-                state[key] = datetime.now().isoformat()
-                fired = True
-        else:
-            log(f"Temp low ({temp_f:.1f}F) but cooldown active for 'temp_low'")
-    else:
-        state.pop('temp_low', None)
-
-    # ── TEMP HIGH ─────────────────────────────────────────────────────────────
-    if temp_f is not None and temp_f > TEMP_HIGH_F:
-        key = 'temp_high'
-        if cooldown_expired(state, key):
-            body = (
-                f"ALERT: High Temperature\n\n"
-                f"Current temp: {temp_f:.1f} degF ({temp_c:.1f} degC)\n"
-                f"Threshold:    > {TEMP_HIGH_F:.0f} degF\n\n"
-                f"Elevated temperature may indicate HVAC failure or increased\n"
-                f"thermal load in the clean room. Verify environmental controls.\n\n"
-                f"Timestamp:    {now_str}\n"
-                f"Location:     WLC High Bay (Wright Lab, Yale University)\n"
-                f"Instrument:   Particles Plus Model 7301\n"
-            )
-            if send_email(f"HIGH TEMPERATURE: {temp_f:.1f}F (threshold {TEMP_HIGH_F:.0f}F)", body):
-                state[key] = datetime.now().isoformat()
-                fired = True
-        else:
-            log(f"Temp high ({temp_f:.1f}F) but cooldown active for 'temp_high'")
-    else:
-        state.pop('temp_high', None)
-
-    # ── PARTICLE COUNT HIGH ───────────────────────────────────────────────────
-    if ch1_m3 is not None and ch1_m3 > PARTICLE_HIGH_M3:
-        key = 'particle_high'
-        if cooldown_expired(state, key):
-            body = (
-                f"ALERT: Elevated Particle Count\n\n"
-                f"0.3 µm channel: {ch1_m3:,.0f} counts/m³\n"
-                f"Threshold:      > {PARTICLE_HIGH_M3:,} counts/m³\n\n"
-                f"An elevated particle count at 0.3 µm may indicate a contamination\n"
-                f"event, personnel activity, or filter degradation. Review the\n"
-                f"dashboard for the full size distribution and trend.\n\n"
-                f"Dashboard: https://rohit-raut.github.io/WLC-High-Bay-Monitoring/\n\n"
-                f"Timestamp:    {now_str}\n"
-                f"Location:     WLC High Bay (Wright Lab, Yale University)\n"
-                f"Instrument:   Particles Plus Model 7301\n"
-            )
-            if send_email(f"HIGH PARTICLE COUNT: {ch1_m3:,.0f} /m³ at 0.3µm", body):
-                state[key] = datetime.now().isoformat()
-                fired = True
-        else:
-            log(f"Particle high ({ch1_m3:,.0f}/m³) but cooldown active")
-    else:
-        state.pop('particle_high', None)
-
-    # ── COUNTER OFFLINE ───────────────────────────────────────────────────────
-    if last_meas_dt is not None:
-        offline_min = (datetime.now() - last_meas_dt).total_seconds() / 60
-        if offline_min > OFFLINE_ALERT_MIN:
-            key = 'counter_offline'
-            if cooldown_expired(state, key):
-                body = (
-                    f"ALERT: Particle Counter Appears Offline\n\n"
-                    f"Last measurement: {last_meas_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    f"Time since last record: {offline_min:.0f} minutes\n"
-                    f"Threshold: > {OFFLINE_ALERT_MIN} minutes\n\n"
-                    f"The particle counter has not produced a new record for an\n"
-                    f"extended period. Check that particle_plus.py is running on\n"
-                    f"noether (tmux session 'particle') and that the counter is\n"
-                    f"powered and reachable at 10.66.66.68:502.\n\n"
-                    f"Dashboard: https://rohit-raut.github.io/WLC-High-Bay-Monitoring/\n\n"
-                    f"Timestamp:    {now_str}\n"
-                    f"Location:     WLC High Bay (Wright Lab, Yale University)\n"
-                )
-                if send_email(f"COUNTER OFFLINE: no data for {offline_min:.0f} min", body):
-                    state[key] = datetime.now().isoformat()
-                    fired = True
-            else:
-                log(f"Counter offline ({offline_min:.0f} min) but cooldown active")
-        else:
-            state.pop('counter_offline', None)
-
-    # ── DISTRIBUTED SHELLY SENSORS ────────────────────────────────────────────
-    # Two conditions per location: gone silent, and last reading out of band.
-    # Locations are keyed by name so each one carries its own cooldown.
-    #
-    # A sensor that has NEVER reported is logged, not mailed: that is a
-    # deployment/config gap (a prefix in sensors.yaml with no device behind it),
-    # and mailing it would repeat forever with nothing anyone can fix by email.
     for s in sensor_series():
         loc = s.get('name') or 'unknown'
-        if not s.get('ts'):
+        entry = {'name': loc, 'last_dt': None, 'silent_h': None,
+                 'temp_c': None, 'temp_f': None, 'rh': None, 'never': not s.get('ts')}
+        if s.get('ts'):
+            try:
+                entry['last_dt'] = datetime.strptime(s['ts'][-1], '%Y-%m-%d %H:%M:%S')
+                entry['silent_h'] = ((datetime.now() - entry['last_dt'])
+                                     .total_seconds() / 3600.0)
+            except (ValueError, TypeError):
+                log(f"Sensor '{loc}' has an unparseable timestamp — treating as no data")
+                entry['never'] = True
+            entry['temp_c'] = next((v for v in reversed(s.get('temp') or [])
+                                    if v is not None), None)
+            entry['rh']     = next((v for v in reversed(s.get('rh') or [])
+                                    if v is not None), None)
+            if entry['temp_c'] is not None:
+                entry['temp_f'] = round(entry['temp_c'] * 9 / 5 + 32, 1)
+        r['sensors'].append(entry)
+
+    return r
+
+
+# ── Deciding what is wrong ───────────────────────────────────────────────────
+
+def evaluate(r):
+    """Every condition currently active, as a list of dicts.
+
+    Pure: takes readings, returns findings, sends nothing and touches no state.
+    That is what makes the whole alert ruleset testable without a mail server.
+
+    Each condition carries `key` (its cooldown identity), `subject` (used when
+    it is the only alert in the mail), and the lines shown in the digest.
+    """
+    out = []
+
+    def add(key, title, subject, reading, limit, why, hours=None):
+        out.append({'key': key, 'title': title, 'subject': subject,
+                    'reading': reading, 'limit': limit, 'why': why, 'hours': hours})
+
+    rh, temp_f, temp_c = r.get('rh'), r.get('temp_f'), r.get('temp_c')
+
+    if rh is not None and rh < RH_LOW_PCT:
+        add('rh_low', 'LOW HUMIDITY',
+            f"LOW HUMIDITY: {rh:.1f}% (limit {RH_LOW_PCT:.0f}%)",
+            f"{rh:.1f} %", f"below {RH_LOW_PCT:.0f} %",
+            "Low humidity raises electrostatic discharge risk, which can damage "
+            "detector components during assembly. Check the clean room HVAC.")
+
+    if rh is not None and rh > RH_HIGH_PCT:
+        add('rh_high', 'HIGH HUMIDITY',
+            f"HIGH HUMIDITY: {rh:.1f}% (limit {RH_HIGH_PCT:.0f}%)",
+            f"{rh:.1f} %", f"above {RH_HIGH_PCT:.0f} %",
+            "High humidity can condense on detector surfaces and increases "
+            "particle adhesion. Check the clean room HVAC.")
+
+    if temp_f is not None and temp_f < TEMP_LOW_F:
+        add('temp_low', 'LOW TEMPERATURE',
+            f"LOW TEMPERATURE: {temp_f:.1f}F (limit {TEMP_LOW_F:.0f}F)",
+            f"{temp_f:.1f} degF ({temp_c:.1f} degC)", f"below {TEMP_LOW_F:.0f} degF",
+            "Abnormally cold. Most likely a door left open or a heating failure. "
+            "Check the bay doors first, then the HVAC.")
+
+    if temp_f is not None and temp_f > TEMP_HIGH_F:
+        add('temp_high', 'HIGH TEMPERATURE',
+            f"HIGH TEMPERATURE: {temp_f:.1f}F (limit {TEMP_HIGH_F:.0f}F)",
+            f"{temp_f:.1f} degF ({temp_c:.1f} degC)", f"above {TEMP_HIGH_F:.0f} degF",
+            "Elevated temperature suggests an HVAC failure or an unusual thermal "
+            "load in the clean room.")
+
+    ch1 = r.get('ch1_m3')
+    if ch1 is not None and ch1 > PARTICLE_HIGH_M3:
+        add('particle_high', 'HIGH PARTICLE COUNT',
+            f"HIGH PARTICLE COUNT: {ch1:,.0f} /m3 at 0.3um",
+            f"{ch1:,.0f} /m3 cumulative >=0.3 um",
+            f"above {PARTICLE_HIGH_M3:,} /m3",
+            "Dirtier than ISO 9, the worst classified level. Likely a "
+            "contamination event, heavy personnel activity, or filter "
+            "degradation. Check the size distribution on the dashboard.")
+
+    off = r.get('offline_min')
+    if off is not None and off > OFFLINE_ALERT_MIN:
+        last = r['last_meas_dt'].strftime('%Y-%m-%d %H:%M:%S')
+        add('counter_offline', 'COUNTER OFFLINE',
+            f"COUNTER OFFLINE: no data for {off:.0f} min",
+            f"silent {off:.0f} min (last record {last})",
+            f"more than {OFFLINE_ALERT_MIN} min",
+            "No new record from the particle counter. Check that "
+            "particle_plus.py is running on noether (tmux session 'wlc') and "
+            f"that the counter is reachable at {COUNTER_HINT}.")
+
+    # ── the distributed Shelly sensors ────────────────────────────────────────
+    # A sensor that has NEVER reported is logged, never mailed: that is a
+    # deployment gap (a prefix in sensors.yaml with no device behind it), and
+    # mailing it would repeat forever with nothing fixable by email.
+    for s in r.get('sensors') or []:
+        loc = s['name']
+        if s['never']:
             log(f"Sensor '{loc}' has never reported — not alerting (check sensors.yaml)")
             continue
 
-        try:
-            last_dt = datetime.strptime(s['ts'][-1], '%Y-%m-%d %H:%M:%S')
-        except (ValueError, TypeError):
-            log(f"Sensor '{loc}' has an unparseable timestamp — skipping")
-            continue
-        silent_h = (datetime.now() - last_dt).total_seconds() / 3600.0
-
-        # ── sensor silent ─────────────────────────────────────────────────────
-        if silent_h > SENSOR_SILENT_HOURS:
-            key = f'sensor_silent:{loc}'
-            body = (
-                f"ALERT: Sensor Not Reporting\n\n"
-                f"Location:     {loc}\n"
-                f"Last report:  {last_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"Silent for:   {silent_h:.1f} hours\n"
-                f"Threshold:    > {SENSOR_SILENT_HOURS:.0f} hours\n\n"
-                f"This Shelly H&T has stopped reporting. Most likely a flat\n"
-                f"battery; also check the MQTT broker and that\n"
-                f"shelly_ht_logger.py is still running on noether (tmux session\n"
-                f"'wlc', window 'ht-logger').\n\n"
-                f"Timestamp:    {now_str}\n"
-                f"Location:     WLC High Bay (Wright Lab, Yale University)\n"
-            )
-            if fire(state, key,
-                    f"SENSOR SILENT: {loc} ({silent_h:.0f} h)", body,
-                    hours=SENSOR_SILENT_COOLDOWN_H):
-                fired = True
+        if s['silent_h'] is not None and s['silent_h'] > SENSOR_SILENT_HOURS:
+            add(f'sensor_silent:{loc}', 'SENSOR SILENT',
+                f"SENSOR SILENT: {loc} ({s['silent_h']:.0f} h)",
+                f"{loc}: no report for {s['silent_h']:.1f} h "
+                f"(last {s['last_dt'].strftime('%Y-%m-%d %H:%M')})",
+                f"more than {SENSOR_SILENT_HOURS:.0f} h",
+                "Most likely a flat battery. Also check the MQTT broker and that "
+                "shelly_ht_logger.py is running on noether (tmux 'wlc', window "
+                "'ht-logger').",
+                hours=SENSOR_SILENT_COOLDOWN_H)
             continue          # a silent sensor's last reading is not news
 
-        state.pop(f'sensor_silent:{loc}', None)
-
-        # ── sensor out of band ────────────────────────────────────────────────
-        # Only reached while the sensor is reporting, so the values are current.
-        # The Shellys log °C; thresholds are °F.
-        s_tc = next((v for v in reversed(s.get('temp') or []) if v is not None), None)
-        s_rh = next((v for v in reversed(s.get('rh')   or []) if v is not None), None)
-        s_tf = round(s_tc * 9 / 5 + 32, 1) if s_tc is not None else None
-
+        # Only reached while the sensor is reporting, so these values are current.
+        why = ("One location is out of range while the rest of the bay may look "
+               "normal — check for a door left open, a local heat source, or an "
+               "HVAC fault serving that area.")
         reasons = []
-        if s_tf is not None and s_tf < TEMP_LOW_F:
-            reasons.append(f"temperature {s_tf:.1f} degF ({s_tc:.1f} degC) "
-                           f"below {TEMP_LOW_F:.0f} degF")
-        if s_tf is not None and s_tf > TEMP_HIGH_F:
-            reasons.append(f"temperature {s_tf:.1f} degF ({s_tc:.1f} degC) "
-                           f"above {TEMP_HIGH_F:.0f} degF")
-        if s_rh is not None and s_rh < RH_LOW_PCT:
-            reasons.append(f"humidity {s_rh:.1f}% below {RH_LOW_PCT:.0f}%")
-        if s_rh is not None and s_rh > RH_HIGH_PCT:
-            reasons.append(f"humidity {s_rh:.1f}% above {RH_HIGH_PCT:.0f}%")
-
-        key = f'sensor_band:{loc}'
+        if s['temp_f'] is not None and s['temp_f'] < TEMP_LOW_F:
+            reasons.append((f"{s['temp_f']:.1f} degF ({s['temp_c']:.1f} degC)",
+                            f"below {TEMP_LOW_F:.0f} degF"))
+        if s['temp_f'] is not None and s['temp_f'] > TEMP_HIGH_F:
+            reasons.append((f"{s['temp_f']:.1f} degF ({s['temp_c']:.1f} degC)",
+                            f"above {TEMP_HIGH_F:.0f} degF"))
+        if s['rh'] is not None and s['rh'] < RH_LOW_PCT:
+            reasons.append((f"{s['rh']:.1f} % RH", f"below {RH_LOW_PCT:.0f} %"))
+        if s['rh'] is not None and s['rh'] > RH_HIGH_PCT:
+            reasons.append((f"{s['rh']:.1f} % RH", f"above {RH_HIGH_PCT:.0f} %"))
         if reasons:
-            body = (
-                f"ALERT: Environment Out of Range at {loc}\n\n"
-                + ''.join(f"  - {r}\n" for r in reasons) +
-                f"\nReading taken: {last_dt.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                f"One location is outside the emergency band while the rest of\n"
-                f"the bay may look normal — check for a door left open, a local\n"
-                f"heat source, or an HVAC fault serving that area.\n\n"
-                f"Timestamp:    {now_str}\n"
-                f"Location:     WLC High Bay (Wright Lab, Yale University)\n"
-                f"Sensor:       Shelly H&T Gen3 ({loc})\n"
-            )
-            if fire(state, key, f"OUT OF RANGE at {loc}: {reasons[0]}", body):
-                fired = True
-        else:
-            state.pop(key, None)
+            add(f'sensor_band:{loc}', 'OUT OF RANGE',
+                f"OUT OF RANGE at {loc}: {reasons[0][0]} {reasons[0][1]}",
+                f"{loc}: " + ', '.join(v for v, _ in reasons),
+                ', '.join(lim for _, lim in reasons), why)
 
+    return out
+
+
+# ── Formatting the mail ──────────────────────────────────────────────────────
+
+DASHBOARD_URL = 'https://rohit-raut.github.io/WLC-High-Bay-Monitoring/'
+COUNTER_HINT  = '10.66.66.68:502'
+_RULE = '-' * 68
+
+
+def _ago(dt):
+    """'4 min ago' / '3.2 h ago' — how fresh a reading is, in words."""
+    if dt is None:
+        return '--'
+    mins = (datetime.now() - dt).total_seconds() / 60
+    if mins < 1:
+        return 'just now'
+    if mins < 90:
+        return f'{mins:.0f} min ago'
+    return f'{mins / 60:.1f} h ago'
+
+
+def conditions_block(r):
+    """The CURRENT CONDITIONS table appended to every alert mail.
+
+    An alert saying "humidity is low" is far more actionable next to the whole
+    bay's readings — often you can diagnose without opening the dashboard.
+    """
+    lines = ['CURRENT CONDITIONS', _RULE,
+             f"  {'LOCATION':<20}{'TEMP':>12}{'HUMIDITY':>11}   NOTE",
+             '']
+
+    if r.get('temp_f') is not None or r.get('rh') is not None:
+        t = f"{r['temp_f']:.1f} degF" if r.get('temp_f') is not None else '--'
+        h = f"{r['rh']:.0f} %"        if r.get('rh')     is not None else '--'
+        note = (f"{r['ch1_m3']:,.0f} /m3 >=0.3um"
+                if r.get('ch1_m3') is not None else 'no particle data')
+        if r.get('offline_min') is not None and r['offline_min'] > OFFLINE_ALERT_MIN:
+            note += f"  [OFFLINE {r['offline_min'] / 60:.0f} h]"
+        lines.append(f"  {'Particle Counter':<20}{t:>12}{h:>11}   {note}")
+    else:
+        lines.append(f"  {'Particle Counter':<20}{'--':>12}{'--':>11}   no data")
+
+    for s in r.get('sensors') or []:
+        if s['never']:
+            lines.append(f"  {s['name']:<20}{'--':>12}{'--':>11}   never reported")
+            continue
+        silent = s['silent_h'] is not None and s['silent_h'] > SENSOR_SILENT_HOURS
+        t = f"{s['temp_f']:.1f} degF" if s['temp_f'] is not None else '--'
+        h = f"{s['rh']:.0f} %"        if s['rh']     is not None else '--'
+        if silent:
+            lines.append(f"  {s['name']:<20}{'--':>12}{'--':>11}   "
+                         f"SILENT {s['silent_h']:.0f} h")
+        else:
+            lines.append(f"  {s['name']:<20}{t:>12}{h:>11}   {_ago(s['last_dt'])}")
+
+    if not r.get('sensors'):
+        lines.append('  (no distributed sensors configured)')
+    return '\n'.join(lines)
+
+
+def digest_subject(due):
+    """One alert keeps its own descriptive subject; several get a count."""
+    if len(due) == 1:
+        return due[0]['subject']
+    return f"{len(due)} ALERTS: {due[0]['title']} + {len(due) - 1} more"
+
+
+def digest_body(due, r, now_str):
+    """Every condition active in this run, then the full current readings."""
+    head = [f"{len(due)} alert{'s' if len(due) != 1 else ''} active at {now_str}",
+            '', 'ACTIVE ALERTS', _RULE, '']
+    for i, a in enumerate(due, 1):
+        head += [f"  [{i}] {a['title']}",
+                 f"      Reading:  {a['reading']}",
+                 f"      Limit:    {a['limit']}"]
+        # wrap the explanation to a readable width without importing textwrap
+        words, line = a['why'].split(), ''
+        why_lines = []
+        for w in words:
+            if len(line) + len(w) + 1 > 60:
+                why_lines.append(line)
+                line = w
+            else:
+                line = f'{line} {w}'.strip()
+        why_lines.append(line)
+        head += [f"      {'Why:' if n == 0 else '    '}      {wl}"
+                 for n, wl in enumerate(why_lines)]
+        head.append('')
+
+    tail = ['', conditions_block(r), '', _RULE,
+            f"Dashboard:  {DASHBOARD_URL}",
+            f"Sent:       {now_str}",
+            "Location:   WLC High Bay (Wright Lab, Yale University)",
+            "Instrument: Particles Plus Model 7301",
+            "",
+            "Each condition re-notifies at most once every "
+            f"{COOLDOWN_HOURS} h while it stays active.",
+            ]
+    return '\n'.join(head + tail)
+
+
+# ── The 10-minute check ──────────────────────────────────────────────────────
+
+def check_alerts():
+    """Evaluate every condition and send ONE digest covering those that are due.
+
+    Grouping matters: a real HVAC failure trips temperature, humidity and
+    several sensors at once, and three separate emails with no overview are
+    harder to act on than one that shows the whole picture. Cooldowns stay
+    per-condition, so a new problem still mails immediately even if another
+    condition is mid-cooldown.
+    """
+    state   = load_state()
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    r = gather_readings()
+    if not r['have_data']:
+        log('No data available to check.')
+        return
+
+    log(f"Check: RH={r['rh']}%  Temp={r['temp_f']}F  ch1={r['ch1_m3']}/m³  "
+        f"last_meas={r['last_meas_dt'].strftime('%H:%M') if r['last_meas_dt'] else 'unknown'}")
+
+    active = evaluate(r)
+    active_keys = {a['key'] for a in active}
+
+    # a condition that recovered drops its cooldown, so the next occurrence
+    # notifies immediately instead of waiting out the old timer
+    for key in [k for k in state if k not in active_keys]:
+        state.pop(key, None)
+
+    if not active:
+        if not DRY_RUN:
+            save_state(state)
+        log('All parameters within normal range.')
+        return
+
+    due     = [a for a in active if cooldown_expired(state, a['key'], a['hours'])]
+    waiting = [a for a in active if a not in due]
+    for a in waiting:
+        log(f"{a['key']} active but cooldown not expired")
+
+    if due:
+        if send_email(digest_subject(due), digest_body(due, r, now_str)):
+            for a in due:
+                state[a['key']] = datetime.now().isoformat()
     if not DRY_RUN:
         save_state(state)
-    if not fired:
-        log("All parameters within normal range.")
+
+
+# ── Weekly summary ───────────────────────────────────────────────────────────
+
+def _stats(values):
+    """(min, mean, max) of the non-None values, or None if there are none."""
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return None
+    return min(vals), sum(vals) / len(vals), max(vals)
+
+
+def _fmt_stats(st, unit, dp=1):
+    if st is None:
+        return 'no data'
+    return f"{st[0]:,.{dp}f} / {st[1]:,.{dp}f} / {st[2]:,.{dp}f} {unit}"
+
+
+def archive_rows_since(days):
+    """Measurement rows from the last `days` days (empty list on any problem)."""
+    if not os.path.exists(MEAS_CSV):
+        return []
+    cutoff = datetime.now() - timedelta(days=days)
+    out = []
+    try:
+        with open(MEAS_CSV) as f:
+            for row in csv.DictReader(f):
+                dt = _row_dt(row)
+                if dt is not None and dt >= cutoff:
+                    out.append(row)
+    except OSError:
+        pass
+    return out
+
+
+def send_weekly_summary(days=7):
+    """Periodic report — and proof the alert pipeline itself still works.
+
+    A monitoring system that has silently died looks exactly like a lab where
+    nothing is wrong. This is the difference between the two.
+    """
+    now   = datetime.now()
+    since = now - timedelta(days=days)
+    rows  = archive_rows_since(days)
+
+    temps = [safe_float(x.get('temp_C')) for x in rows]
+    temps_f = [round(t * 9 / 5 + 32, 1) for t in temps if t is not None]
+    rhs   = [safe_float(x.get('RH_pct')) for x in rows]
+    ch1s  = [safe_float(x.get('ch1_sum_m3')) for x in rows]
+
+    lines = [f"Weekly summary  {since.strftime('%Y-%m-%d')} to {now.strftime('%Y-%m-%d')}",
+             '', 'PARTICLE COUNTER', _RULE,
+             f"  Samples:      {len(rows):,}",
+             f"  Temperature:  {_fmt_stats(_stats(temps_f), 'degF')}   (min / mean / max)",
+             f"  Humidity:     {_fmt_stats(_stats(rhs), '%', 0)}   (min / mean / max)",
+             f"  Particles:    {_fmt_stats(_stats(ch1s), '/m3 >=0.3um', 0)}",
+             '']
+
+    if not rows:
+        lines.append('  NO SAMPLES THIS WEEK — the counter or the logger was down.')
+        lines.append('')
+
+    lines += ['SENSOR LOCATIONS', _RULE,
+              f"  {'LOCATION':<20}{'REPORTS':>9}   TEMP degF (min/mean/max)"
+              f"      RH % (min/mean/max)", '']
+    try:
+        from features.temp_humidity_sensor.reader import load_sensor_series
+        series = load_sensor_series(days=days)
+    except Exception as e:
+        series = []
+        lines.append(f'  (sensor data unavailable: {e})')
+
+    for s in series:
+        n = len(s.get('ts') or [])
+        if not n:
+            lines.append(f"  {s['name']:<20}{0:>9}   no reports this week")
+            continue
+        tf = [round(t * 9 / 5 + 32, 1) for t in (s.get('temp') or []) if t is not None]
+        st, sh = _stats(tf), _stats(s.get('rh') or [])
+        lines.append(f"  {s['name']:<20}{n:>9}   "
+                     f"{_fmt_stats(st, ''):<28}{_fmt_stats(sh, '', 0)}")
+    if not series:
+        lines.append('  (no distributed sensors configured)')
+
+    state = load_state()
+    lines += ['', 'ALERTS CURRENTLY ACTIVE', _RULE]
+    if state:
+        for key, when in sorted(state.items()):
+            lines.append(f"  {key:<28} since {when[:19].replace('T', ' ')}")
+    else:
+        lines.append('  none')
+
+    lines += ['', '', conditions_block(gather_readings()), '', _RULE,
+              f"Dashboard:  {DASHBOARD_URL}",
+              f"Sent:       {now.strftime('%Y-%m-%d %H:%M:%S')}",
+              "Location:   WLC High Bay (Wright Lab, Yale University)",
+              '',
+              "This report also proves the alert system is alive. If it stops",
+              "arriving, the cron entry or the mail path has failed — a silent",
+              "monitor and a healthy lab look identical until you need one.",
+              ]
+
+    ok = send_email(f"Weekly summary  {since.strftime('%b %d')} - {now.strftime('%b %d')}",
+                    '\n'.join(lines))
+    log('Weekly summary sent.' if ok else 'Weekly summary FAILED — see the error above.')
+    return ok
 
 
 if __name__ == '__main__':
@@ -562,8 +726,8 @@ if __name__ == '__main__':
 
     _p = argparse.ArgumentParser(
         description='WLC High Bay environmental alerts. '
-                    'With no options: check every condition and email any that fire. '
-                    'See features/alerts/README.md.')
+                    'With no options: check every condition and email a digest of '
+                    'any that fire. See features/alerts/README.md.')
     _p.add_argument('--dry-run', action='store_true',
                     help='report what WOULD be sent and send nothing: cooldowns are '
                          'neither recorded nor respected, so every active condition '
@@ -571,6 +735,9 @@ if __name__ == '__main__':
     _p.add_argument('--test-email', action='store_true',
                     help='send one test message to confirm delivery works, then exit '
                          '(reads no data, changes no state)')
+    _p.add_argument('--weekly-summary', action='store_true',
+                    help='send the periodic summary report and exit (run from cron '
+                         'once a week; combine with --dry-run to preview it)')
     _args = _p.parse_args()
 
     DRY_RUN = _args.dry_run
@@ -580,4 +747,8 @@ if __name__ == '__main__':
 
     if DRY_RUN:
         log('DRY RUN — sending nothing; cooldowns neither recorded nor respected')
+
+    if _args.weekly_summary:
+        raise SystemExit(0 if send_weekly_summary() else 1)
+
     check_alerts()

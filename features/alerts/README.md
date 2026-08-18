@@ -49,9 +49,68 @@ flat, and hourly mail about it helps nobody.
 
 All thresholds are configurable at the top of `alerts.py`.
 
-A 2-hour cooldown prevents repeat emails for the same active condition.
-Once a condition recovers, the cooldown resets so the next occurrence will
-trigger a fresh alert.
+---
+
+## What the email looks like
+
+**Everything active in one run arrives as a single digest**, not one mail per
+condition. A real HVAC failure trips temperature, humidity and several sensors
+at once; four fragments are harder to act on than one picture. Every alert mail
+ends with a table of current readings from the counter and every sensor, built
+from the same numbers the alerts were judged on — so the mail can never
+contradict itself.
+
+```
+Subject: [WLC Clean Room] 3 ALERTS: LOW TEMPERATURE + 2 more
+
+3 alerts active at 2026-08-18 17:40:02
+
+ACTIVE ALERTS
+--------------------------------------------------------------------
+
+  [1] LOW TEMPERATURE
+      Reading:  38.2 degF (3.4 degC)
+      Limit:    below 40 degF
+      Why:      Abnormally cold. Most likely a door left open or a
+                heating failure. Check the bay doors first, then the HVAC.
+
+  [2] SENSOR SILENT
+      Reading:  Entrance: no report for 31.4 h (last 2026-08-17 10:12)
+      Limit:    more than 24 h
+      ...
+
+CURRENT CONDITIONS
+--------------------------------------------------------------------
+  LOCATION                    TEMP   HUMIDITY   NOTE
+
+  Particle Counter       38.2 degF       44 %   118,432 /m3 >=0.3um
+  CF Prep                67.1 degF       45 %   3 min ago
+  Entrance                      --         --   SILENT 31 h
+```
+
+A **2-hour cooldown** prevents repeat mail for the same active condition
+(24 h for sensor silence). Cooldowns are per-condition, so a new problem
+notifies immediately even while another is mid-cooldown. Once a condition
+recovers its cooldown is dropped, so the next occurrence is never delayed.
+
+---
+
+## Weekly summary
+
+```
+0 8 * * 1 cd /home/rraut/particle_plus && python3 features/alerts/alerts.py --weekly-summary
+```
+
+One report each Monday: 7-day min/mean/max for counter temperature, humidity
+and particle count, per-location sensor statistics with report counts, any
+alerts currently active, and the same current-conditions table.
+
+It is also the proof that alerting still works. A monitoring system that has
+silently died looks exactly like a lab where nothing is wrong — the weekly mail
+is what distinguishes them. If it stops arriving, the cron entry or the mail
+path has failed.
+
+Preview it without sending: `--weekly-summary --dry-run`.
 
 ---
 
@@ -126,14 +185,16 @@ Expect `All parameters within normal range.`
 
 ### Step 6: Add to cron on noether
 
-Run `crontab -e` and add:
+Run `crontab -e` and add both lines:
 
 ```
 */10 * * * * cd /home/rraut/particle_plus && python3 features/alerts/alerts.py >> alert_cron.log 2>&1
+0 8 * * 1    cd /home/rraut/particle_plus && python3 features/alerts/alerts.py --weekly-summary >> alert_cron.log 2>&1
 ```
 
-This runs the check every 10 minutes. The script is fast (reads CSV, checks
-values, exits) so cron overhead is negligible.
+The first runs the check every 10 minutes; the second sends the Monday-morning
+summary. The script is fast (reads CSV, checks values, exits) so cron overhead
+is negligible.
 
 ---
 

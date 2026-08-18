@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Self-check for the Shelly sensor alert conditions in alerts.py.
-
-The counter checks are exercised every time the script runs for real; the two
-sensor conditions are not, because they need a sensor that is silent or out of
-band. This stubs the sensor reader with synthetic series and asserts which
-alerts come out.
+"""Self-check for the alert ruleset in alerts.py.
 
     python3 features/alerts/test_alerts.py        # prints OK or raises
 
-No framework, no fixtures — nothing is sent, nothing is written.
+Two layers:
+  * evaluate() is pure — readings in, findings out — so most of the ruleset is
+    checked by calling it directly, with no mail server and no data files.
+  * check_alerts() is checked only for the things evaluate() cannot show:
+    that several conditions arrive as ONE email, and how cooldowns behave.
+
+Fixtures derive from the CONFIGURED thresholds, so retuning a threshold (or
+leaving a test value behind) never fails this. No framework, no fixtures,
+nothing sent, nothing written.
 """
 
 import os
@@ -24,86 +27,126 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import alerts
 
 
-def _series(name, ago_hours, temp_c, rh):
-    ts = (datetime.now() - timedelta(hours=ago_hours)).strftime('%Y-%m-%d %H:%M:%S')
-    return {'name': name, 'ts': [ts], 'temp': [temp_c], 'rh': [rh]}
-
-
-def run(series, state=None):
-    """Run check_alerts() against `series`, returning the subjects it would send.
-
-    `state` seeds the cooldown file (default: empty, so every condition is free
-    to fire).
-    """
-    sent = []
-    orig_send, orig_series, orig_state = (
-        alerts.send_email, alerts.sensor_series, alerts.load_state)
-    alerts.send_email    = lambda subject, body: (sent.append(subject), True)[1]
-    alerts.sensor_series = lambda: series
-    alerts.load_state    = lambda: dict(state or {})
-    alerts.save_state    = lambda s: None        # never touch the real state file
-    try:
-        alerts.check_alerts()
-    finally:
-        alerts.send_email, alerts.sensor_series, alerts.load_state = (
-            orig_send, orig_series, orig_state)
-    return [s for s in sent if 'SENSOR' in s or 'OUT OF RANGE' in s]
-
-
 def _f_to_c(f):
     return (f - 32) * 5 / 9
 
 
+MID_TF  = (alerts.TEMP_LOW_F + alerts.TEMP_HIGH_F) / 2
+MID_RH  = (alerts.RH_LOW_PCT + alerts.RH_HIGH_PCT) / 2
+COLD_C  = _f_to_c(alerts.TEMP_LOW_F - 10)
+HOT_C   = _f_to_c(alerts.TEMP_HIGH_F + 10)
+DRY_RH  = alerts.RH_LOW_PCT - 5
+WET_RH  = alerts.RH_HIGH_PCT + 5
+SILENT  = alerts.SENSOR_SILENT_HOURS + 1
+
+
+def sensor(name, silent_h=0.02, temp_c=None, rh=None, never=False):
+    temp_c = _f_to_c(MID_TF) if temp_c is None else temp_c
+    rh     = MID_RH if rh is None else rh
+    return {'name': name, 'never': never,
+            'last_dt': datetime.now() - timedelta(hours=silent_h),
+            'silent_h': silent_h,
+            'temp_c': temp_c, 'temp_f': round(temp_c * 9 / 5 + 32, 1), 'rh': rh}
+
+
+def readings(sensors=(), **kw):
+    """A healthy lab, overridable field by field."""
+    r = {'have_data': True, 'rh': MID_RH, 'temp_c': _f_to_c(MID_TF), 'temp_f': MID_TF,
+         'ch1_m3': 1000.0, 'last_meas_dt': datetime.now(), 'offline_min': 1.0,
+         'sensors': list(sensors)}
+    r.update(kw)
+    return r
+
+
+def keys(r):
+    return sorted(c['key'] for c in alerts.evaluate(r))
+
+
 def demo():
-    # Fixtures are derived from the CONFIGURED thresholds, not hardcoded numbers,
-    # so this checks the logic rather than today's tuning — retuning a threshold
-    # (or leaving a test value like TEMP_LOW_F = 80 behind) must not fail it.
-    mid_c   = _f_to_c((alerts.TEMP_LOW_F + alerts.TEMP_HIGH_F) / 2)
-    mid_rh  = (alerts.RH_LOW_PCT + alerts.RH_HIGH_PCT) / 2
-    cold_c  = _f_to_c(alerts.TEMP_LOW_F - 10)
-    hot_c   = _f_to_c(alerts.TEMP_HIGH_F + 10)
-    dry_rh  = alerts.RH_LOW_PCT - 5
-    wet_rh  = alerts.RH_HIGH_PCT + 5
-    silent  = alerts.SENSOR_SILENT_HOURS + 1
+    # ── the ruleset, via the pure function ────────────────────────────────────
+    assert keys(readings()) == [], 'a healthy lab raised an alert'
 
-    # mid-band reading a minute ago — healthy, says nothing
-    assert run([_series('Storage', 0.02, mid_c, mid_rh)]) == [], 'healthy sensor alerted'
+    assert keys(readings(temp_f=alerts.TEMP_LOW_F - 1)) == ['temp_low']
+    assert keys(readings(temp_f=alerts.TEMP_HIGH_F + 1)) == ['temp_high']
+    assert keys(readings(rh=alerts.RH_LOW_PCT - 1)) == ['rh_low']
+    assert keys(readings(rh=alerts.RH_HIGH_PCT + 1)) == ['rh_high']
+    assert keys(readings(ch1_m3=alerts.PARTICLE_HIGH_M3 + 1)) == ['particle_high']
+    assert keys(readings(offline_min=alerts.OFFLINE_ALERT_MIN + 1)) == ['counter_offline']
 
-    # silent past SENSOR_SILENT_HOURS — one silence alert
-    out = run([_series('Storage', silent, mid_c, mid_rh)])
-    assert len(out) == 1 and out[0].startswith('SENSOR SILENT'), out
+    # thresholds are exclusive: exactly at the limit is still fine
+    assert keys(readings(temp_f=alerts.TEMP_LOW_F)) == [], 'fired exactly at the limit'
+    assert keys(readings(offline_min=alerts.OFFLINE_ALERT_MIN)) == []
 
-    # below TEMP_LOW_F — the door-left-open-in-winter case
-    out = run([_series('Entrance', 0.02, cold_c, mid_rh)])
-    assert len(out) == 1 and out[0].startswith('OUT OF RANGE'), out
+    # ── the Shelly sensors ────────────────────────────────────────────────────
+    assert keys(readings([sensor('Storage')])) == [], 'healthy sensor alerted'
+    assert keys(readings([sensor('Storage', silent_h=SILENT)])) == ['sensor_silent:Storage']
 
-    # out of band BUT silent → reported as silent only, never as a live reading
-    out = run([_series('Entrance', silent, cold_c, mid_rh)])
-    assert len(out) == 1 and out[0].startswith('SENSOR SILENT'), out
+    # the door-left-open-in-winter case
+    assert keys(readings([sensor('Entrance', temp_c=COLD_C)])) == ['sensor_band:Entrance']
+    assert keys(readings([sensor('Entrance', temp_c=HOT_C)])) == ['sensor_band:Entrance']
+    assert keys(readings([sensor('Entrance', rh=DRY_RH)])) == ['sensor_band:Entrance']
+    assert keys(readings([sensor('Entrance', rh=WET_RH)])) == ['sensor_band:Entrance']
 
-    # configured but never seen (no rows) — logged, never mailed
-    assert run([{'name': 'CF Prep', 'ts': [], 'temp': [], 'rh': []}]) == [], \
-        'a sensor that never reported must not mail'
+    # out of band BUT silent → reported as silent only; a dead sensor's last
+    # reading must never be presented as if it were current
+    assert keys(readings([sensor('Entrance', silent_h=SILENT, temp_c=COLD_C)])) \
+        == ['sensor_silent:Entrance']
 
-    # the other three band edges
-    assert run([_series('Storage', 0.02, mid_c, wet_rh)])[0].startswith('OUT OF RANGE')
-    assert run([_series('Storage', 0.02, mid_c, dry_rh)])[0].startswith('OUT OF RANGE')
-    assert run([_series('Storage', 0.02, hot_c,  mid_rh)])[0].startswith('OUT OF RANGE')
+    # configured but never seen → a deployment gap, logged and never mailed
+    assert keys(readings([sensor('CF Prep', never=True)])) == []
 
-    # --dry-run must ignore an active cooldown, or it would report "nothing wrong"
-    # about a condition that is very much wrong
-    just_fired = {'sensor_band:Entrance': datetime.now().isoformat()}
-    assert run([_series('Entrance', 0.02, cold_c, mid_rh)], just_fired) == [], \
+    # ── the digest: everything wrong at once arrives as ONE mail ──────────────
+    storm = readings([sensor('Entrance', temp_c=COLD_C),
+                      sensor('Storage', silent_h=SILENT)],
+                     temp_f=alerts.TEMP_LOW_F - 1,
+                     offline_min=alerts.OFFLINE_ALERT_MIN + 1)
+    found = keys(storm)
+    assert found == ['counter_offline', 'sensor_band:Entrance',
+                     'sensor_silent:Storage', 'temp_low'], found
+
+    sent = _run_check(storm)
+    assert len(sent) == 1, f'{len(sent)} emails for one event, expected a single digest'
+    subject, body = sent[0]
+    assert subject.startswith('4 ALERTS'), subject
+    for k in ('LOW TEMPERATURE', 'COUNTER OFFLINE', 'SENSOR SILENT', 'OUT OF RANGE'):
+        assert k in body, f'{k} missing from the digest body'
+    assert 'CURRENT CONDITIONS' in body, 'summary block missing'
+    assert 'Entrance' in body and 'Storage' in body, 'sensor rows missing from summary'
+
+    # a single alert keeps its own descriptive subject
+    sent = _run_check(readings(temp_f=alerts.TEMP_LOW_F - 1))
+    assert sent[0][0].startswith('LOW TEMPERATURE:'), sent[0][0]
+
+    # ── cooldowns ─────────────────────────────────────────────────────────────
+    fresh = {'temp_low': datetime.now().isoformat()}
+    assert _run_check(readings(temp_f=alerts.TEMP_LOW_F - 1), fresh) == [], \
         'a fresh cooldown should suppress a normal run'
 
     alerts.DRY_RUN = True
     try:
-        out = run([_series('Entrance', 0.02, cold_c, mid_rh)], just_fired)
-        assert len(out) == 1, f'dry run hid an active condition behind a cooldown: {out}'
+        assert len(_run_check(readings(temp_f=alerts.TEMP_LOW_F - 1), fresh)) == 1, \
+            'dry run hid an active condition behind a cooldown'
     finally:
         alerts.DRY_RUN = False
 
-    print('OK — sensor alert conditions behave as specified')
+    print('OK — alert ruleset, digest grouping and cooldowns behave as specified')
+
+
+def _run_check(r, state=None):
+    """Run check_alerts() against fixed readings; return [(subject, body), ...]."""
+    sent = []
+    orig = (alerts.send_email, alerts.gather_readings,
+            alerts.load_state, alerts.save_state)
+    alerts.send_email      = lambda s, b: (sent.append((s, b)), True)[1]
+    alerts.gather_readings = lambda: r
+    alerts.load_state      = lambda: dict(state or {})
+    alerts.save_state      = lambda s: None      # never touch the real state file
+    try:
+        alerts.check_alerts()
+    finally:
+        (alerts.send_email, alerts.gather_readings,
+         alerts.load_state, alerts.save_state) = orig
+    return sent
 
 
 if __name__ == '__main__':
