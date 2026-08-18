@@ -31,6 +31,8 @@ features/temp_humidity_sensor/sensors.yaml
 # Local working notes — the ONE ongoing-work file (all other md files besides
 # README.md were removed 2026-07-07); keep local only, don't publish
 ONGOING_WORK.md
+# Session-by-session log of local dashboard changes — local only
+tracking.md
 CLEANUP_GITHUB.sh
 
 # Noether-only full-history dashboard output (local_serve.py) — NEVER push:

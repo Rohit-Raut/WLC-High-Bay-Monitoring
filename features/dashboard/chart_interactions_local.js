@@ -187,6 +187,88 @@ const PLOTLY_CFG = {
   modeBarButtonsToRemove: ['select2d', 'lasso2d'],
 };
 
+// ── Channel visibility: tick-circle legend for the counts + PM charts ────────
+// Plotly's own legend toggled traces on click, but nothing announced that — a
+// first-time viewer never found it. So Plotly's legend is off on both charts
+// and this explicit control replaces it: per size channel a tick circle, a
+// colour sample and the label, mirrored above BOTH charts and sharing one
+// state (the same six channels appear in each). Unticking hides that channel
+// in both. Everything is ticked on a first visit; choices survive the 5-min
+// auto-refresh via sessionStorage, exactly like Time Range and Bin.
+//
+// Building the rows from the fixed COUNTS trace list — not from what Plotly
+// ended up drawing — also fixes a real defect: binned windows drop all-null
+// channels to zero points, and Plotly then silently omitted their legend
+// entries (3 of 6 shown at Bin = 10 min). Every channel is always listed.
+const CH_NAMES  = COUNTS.map(function (tr) { return tr.name; });
+const CH_COLORS = COUNTS.map(function (tr) { return (tr.line && tr.line.color) || '#888'; });
+const CH_LEGEND_IDS = ['legend-counts', 'legend-pm'];
+
+var CH_VIS = (function _restoreChVis() {
+  try {
+    const s = sessionStorage.getItem('wlc-ch-vis');
+    if (s && s.length === CH_NAMES.length) return s.split('').map(c => c === '1');
+  } catch (e) { /* sessionStorage unavailable → fall through to all-visible */ }
+  return CH_NAMES.map(function () { return true; });   // first visit: all ticked
+})();
+
+function _saveChVis() {
+  try {
+    sessionStorage.setItem('wlc-ch-vis', CH_VIS.map(v => v ? '1' : '0').join(''));
+  } catch (e) { /* ignore */ }
+}
+
+// COUNTS and PM are both channel-ordered (1…6), so the index IS the channel.
+function _visibleTraces(traces) {
+  return traces.filter(function (tr, k) { return CH_VIS[k]; });
+}
+
+// A white tick vanishes on the lighter Okabe–Ito fills (#E69F00, #56B4E9) and a
+// dark one vanishes on the light theme's deeper variants, so the glyph colour
+// comes from the luminance of the THEMED fill actually being painted.
+function _tickInk(hex) {
+  const c = hex.replace('#', '');
+  const r = parseInt(c.slice(0, 2), 16),
+        g = parseInt(c.slice(2, 4), 16),
+        b = parseInt(c.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? '#111111' : '#ffffff';
+}
+
+// Re-rendered on every filterAndRender() so the swatches re-skin with the theme.
+function renderChannelLegend() {
+  const html = CH_NAMES.map(function (name, k) {
+    const col = _traceColor(CH_COLORS[k]);
+    const on  = CH_VIS[k];
+    return '<button class="ch-item' + (on ? '' : ' off') + '" data-ch="' + k + '"' +
+      ' type="button" role="switch" aria-checked="' + on + '"' +
+      ' title="' + (on ? 'Hide ' : 'Show ') + name + ' in both charts">' +
+      '<span class="ch-tick" style="border-color:' + col +
+        ';background:' + (on ? col : 'transparent') +
+        ';color:' + _tickInk(col) + '">' + (on ? '&#10003;' : '') + '</span>' +
+      '<span class="ch-line" style="background:' + col + '"></span>' +
+      '<span class="ch-name">' + name + '</span></button>';
+  }).join('');
+  CH_LEGEND_IDS.forEach(function (id) {
+    const box = document.getElementById(id);
+    if (box) box.innerHTML = html;      // absent on the public page → skipped
+  });
+}
+
+function _toggleChannel(k) {
+  CH_VIS[k] = !CH_VIS[k];
+  _saveChVis();
+  filterAndRender();     // redraws both charts AND both legend rows in one pass
+}
+
+CH_LEGEND_IDS.forEach(function (id) {
+  const box = document.getElementById(id);
+  if (!box) return;
+  box.addEventListener('click', function (e) {
+    const b = e.target.closest('.ch-item');
+    if (b) _toggleChannel(parseInt(b.dataset.ch, 10));
+  });
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function sliceIdxForArray(tsArray, mins) {
   if (!mins || tsArray.length === 0) return 0;
@@ -653,6 +735,7 @@ function calculatePMLogRange(pmTraces) {
 // the clean selected window on every call — no drift possible.
 function filterAndRender() {
   const DARK = _baseLayout();   // current theme's layout — rebuilt every render
+  renderChannelLegend();        // tick rows re-skin with the theme too
   const sel  = document.getElementById('sel-range');
   const mins = parseInt(sel.value);
   const i    = sliceIdx(mins);
@@ -670,9 +753,10 @@ function filterAndRender() {
   const binMins = _currentBinMins(mins);
   const binMs   = binMins * 60000;
   // _themedTraces runs BEFORE binning so the binned mean/max traces inherit
-  // the theme-corrected channel color too.
-  const countsRaw  = _themedTraces(sliceTraces(COUNTS, i));
-  const pmRaw      = _themedTraces(sliceTraces(PM, i));
+  // the theme-corrected channel color too. _visibleTraces then drops the
+  // channels unticked in the shared tick legend (both charts, same state).
+  const countsRaw  = _visibleTraces(_themedTraces(sliceTraces(COUNTS, i)));
+  const pmRaw      = _visibleTraces(_themedTraces(sliceTraces(PM, i)));
   const countsData = binMins > 0 ? _binnedTraces(countsRaw, binMs) : countsRaw;
   const pmData     = binMins > 0 ? _binnedTraces(pmRaw, binMs)     : pmRaw;
 
@@ -681,6 +765,7 @@ function filterAndRender() {
   // autorange: false + COUNTS_Y_RANGE  →  Y never jumps on window changes.
   const p1 = Plotly.react('chart-counts', countsData,
     Object.assign({}, DARK, {
+      showlegend: false,       // replaced by the #legend-counts tick row
       yaxis: Object.assign({}, DARK.yaxis, {
         title:      'Counts / m³',
         type:       'log',
@@ -703,6 +788,7 @@ function filterAndRender() {
         const pmRange = calculatePMLogRange(pmData);
         return Plotly.react('chart-pm', pmData,
           Object.assign({}, DARK, {
+            showlegend: false,   // replaced by the #legend-pm tick row
             yaxis: Object.assign({}, DARK.yaxis, {
               title:      'μg / m³',
               type:       'log',

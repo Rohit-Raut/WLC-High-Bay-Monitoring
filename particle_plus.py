@@ -918,9 +918,15 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         '<div class="chart-panel">\n'
         '  <div class="chart-title">PM Mass Concentration Over Time '
         '&nbsp;(<span class="u">&#956;g / m&#179;</span>)</div>\n'
+        '  <div id="legend-pm" class="ch-legend"></div>\n'
         '  <div id="chart-pm" style="height:300px"></div>\n'
         '</div>'
     ) if local else ''
+
+    # Channel tick-legend above the particle-count chart (LOCAL only). Its twin
+    # sits in pm_panel_html above; both rows drive the SAME visibility state.
+    ch_legend_counts_html = ('<div id="legend-counts" class="ch-legend"></div>'
+                             if local else '')
 
     # Environment panel — LOCAL gets the per-sensor card grid (View B) with a
     # click-through cohort view (View C); PUBLIC keeps the classic single chart.
@@ -1540,6 +1546,35 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     body.fit .row2 {{ flex: 1 1 0; min-height: 0; margin-bottom: 0; }}
     body.fit .row2 .chart-panel {{ flex: 1 1 0; }}
   }}
+  /* ── channel tick-legend for the counts / PM charts (LOCAL only) ─────────
+     Plotly's legend already toggled traces on click, but nothing on screen
+     said so — a first-time viewer never discovers it. These rows make the
+     control explicit: one tick circle per size channel, mirrored above both
+     charts and sharing ONE state, so unticking a channel hides it in both.
+     Everything ticked on a first visit. Rendered by
+     chart_interactions_local.js::renderChannelLegend(). */
+  .ch-legend {{ display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 8px 6px; }}
+  .ch-item {{
+    display: inline-flex; align-items: center; gap: 7px;
+    background: transparent; border: 0; padding: 2px;
+    font-family: inherit; font-size: 12.5px; color: var(--text-primary);
+    cursor: pointer; line-height: 1;
+    transition: opacity 0.12s;
+  }}
+  .ch-item:hover .ch-name {{ color: var(--text-accent); }}
+  .ch-item:focus-visible {{
+    outline: 2px solid var(--accent-yale-light); outline-offset: 2px;
+    border-radius: 4px;
+  }}
+  .ch-tick {{
+    width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: bold; flex: none;
+    transition: background-color 0.12s;
+  }}
+  .ch-line {{ width: 18px; height: 3px; border-radius: 2px; flex: none; }}
+  /* unticked: hollow circle + dimmed row — the trace is gone from both charts */
+  .ch-item.off {{ opacity: 0.42; }}
   /* ── env sensor cards + cohort view (LOCAL only — public lacks the markup) ── */
   .chart-title-row {{ display: flex; align-items: center; justify-content: space-between;
     gap: 10px; margin-bottom: 8px; }}
@@ -1654,6 +1689,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
 
 <div class="chart-panel main-panel">
   <div class="chart-title">Particle Concentration Over Time &nbsp;&#8212; all 6 size channels (log scale, <span class="u">counts / m&#179;</span>, ISO 14644-1 reference lines shown for 0.5 <span class="u">&micro;m</span>)</div>
+  {ch_legend_counts_html}
   <div id="chart-counts" style="height:360px"></div>
 </div>
 
