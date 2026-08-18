@@ -30,23 +30,60 @@ from email.message import EmailMessage
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 
-# Paths (must match particle_plus.py config)
-BASE_DIR    = '/home/rraut/particle_plus'
+# Paths. BASE_DIR is derived from this file's location (features/alerts/ -> repo
+# root) so the script runs unmodified on noether, on a laptop, or from cron with
+# any working directory.
+import sys
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# The permanent archive lives OUTSIDE the repo (config paths.project_data_dir,
+# e.g. /project/dune/slow_control/... on noether) and falls back to the repo's
+# data/ dir where that path doesn't exist — the same resolution particle_plus.py
+# does, reusing the same loader so the two can't drift apart.
+try:
+    sys.path.insert(0, BASE_DIR)
+    from features.config_loader import load_config
+    _PROJECT_DATA_DIR = ((load_config(BASE_DIR).get('paths') or {})
+                         .get('project_data_dir') or '')
+except Exception:
+    _PROJECT_DATA_DIR = ''
+ARCHIVE_DIR = _PROJECT_DATA_DIR if os.path.isdir(_PROJECT_DATA_DIR) else f'{BASE_DIR}/data'
+
 LIVE_CSV    = f'{BASE_DIR}/data/live.csv'
-MEAS_CSV    = f'{BASE_DIR}/data/measurements.csv'
+# measurement_archive.csv, NOT the legacy measurements.csv — nothing has written
+# that file since the June 2026 migration (data_manager.migrate_old_files), so
+# reading it meant the particle check re-evaluated one frozen row forever and the
+# offline check saw a months-old timestamp and mailed "COUNTER OFFLINE" endlessly.
+MEAS_CSV    = f'{ARCHIVE_DIR}/measurement_archive.csv'
 STATE_FILE  = f'{BASE_DIR}/data/alert_state.json'
 LOG_FILE    = f'{BASE_DIR}/alert_log.txt'
 
-# Alert thresholds
-RH_LOW_PCT          = 20.0    # % - dry air / electrostatic risk
-RH_HIGH_PCT         = 90.0    # % - condensation / moisture risk
-TEMP_LOW_F          = 33.0    # degF - abnormally cold / potential freeze risk
-TEMP_HIGH_F         = 120.0   # degF - thermal excursion
-# Tent target is ISO 8. ISO 14644-1 defines no 0.3 µm limit for classes 7-9,
-# so this uses the class-formula equivalent 10^8 x (0.1/0.3)^2.08 ~= 10.2M /m³
-# (CUMULATIVE >= 0.3 µm counts).
-PARTICLE_HIGH_M3    = 10_200_000  # counts/m³ cumulative at 0.3 µm - worse than ISO 8 equiv.
+# ── Alert thresholds ──────────────────────────────────────────────────────────
+# These are EMERGENCY limits, deliberately wider than the dashboard's coloured
+# bands in config.yaml: the dashboard warns, this wakes someone up. Only fire
+# when something is genuinely wrong in the lab (HVAC dead, door left open in
+# winter, contamination event) — not on ordinary drift.
+RH_LOW_PCT          = 15.0    # % - severe static discharge risk
+RH_HIGH_PCT         = 85.0    # % - condensation on detector surfaces
+TEMP_LOW_F          = 40.0    # degF - door left open in winter / heating failure
+TEMP_HIGH_F         = 90.0    # degF - no clean room should ever reach this
+# ISO 14644-1 stops at class 9 — there is no class 10, so "off the scale" means
+# ABOVE the ISO 9 limit. The standard defines no 0.3 µm limit for classes 7-9,
+# so this uses the class formula 10^9 x (0.1/0.3)^2.08 ~= 102M /m³ (CUMULATIVE
+# >= 0.3 µm counts). The dashboard already reds at the ISO 9 line; this fires
+# only once the room is dirtier than the worst classified level.
+PARTICLE_HIGH_M3    = 102_000_000  # counts/m³ cumulative at 0.3 µm - worse than ISO 9
 OFFLINE_ALERT_MIN   = 90      # minutes without a new record before alerting
+
+# ── Distributed Shelly H&T sensors (features/temp_humidity_sensor) ────────────
+# The Shellys sit at fixed locations around the High Bay and report every ~5 min.
+# They catch what the counter alone cannot: a loading door left open in winter
+# cools one end of the bay long before the counter's own sensor notices.
+SENSOR_SILENT_HOURS = 24.0    # hours without a report before alerting (dead battery,
+                              # broker outage). Well above the ~5 min report cadence,
+                              # so a few missed wake-ups never trigger it.
+SENSOR_SILENT_COOLDOWN_H = 24.0   # a dead sensor stays dead — re-mail daily, not 2-hourly
 
 # Email settings
 SMTP_HOST = 'smtp.gmail.com'
@@ -73,6 +110,11 @@ except ImportError:
         raise SystemExit(1)
 
 ALERT_SUBJECT_PREFIX = '[WLC Clean Room]'
+
+# --dry-run: report what would be mailed, send nothing, and leave the cooldown
+# state file untouched (a dry run that recorded cooldowns would silence the real
+# cron run that follows it).
+DRY_RUN = False
 
 # Cooldown: once an alert fires, do not re-fire the SAME condition for this long
 COOLDOWN_HOURS = 2
@@ -102,20 +144,32 @@ def save_state(state):
         json.dump(state, f, indent=2)
 
 
-def cooldown_expired(state, key):
+def cooldown_expired(state, key, hours=None):
     """Return True if enough time has passed since the last alert for this key."""
     last = state.get(key)
     if last is None:
         return True
     try:
         last_dt = datetime.fromisoformat(last)
-        return datetime.now() - last_dt > timedelta(hours=COOLDOWN_HOURS)
+        return datetime.now() - last_dt > timedelta(
+            hours=COOLDOWN_HOURS if hours is None else hours)
     except Exception:
         return True
 
 
 def send_email(subject, body):
-    """Send a plain-text alert email via SMTP SSL."""
+    """Send a plain-text alert email via SMTP SSL.
+
+    With --dry-run nothing is sent: the alert is logged instead and reported as
+    delivered, so a run on real data shows exactly who would have been mailed
+    and why. Use it to verify thresholds before adding the cron entry.
+    """
+    if DRY_RUN:
+        log(f"DRY RUN — would send to {', '.join(EMAIL_RECIPIENTS)}: {subject}")
+        for line in body.strip().splitlines():
+            log(f"  | {line}")
+        return True
+
     msg = EmailMessage()
     msg['Subject'] = f'{ALERT_SUBJECT_PREFIX} {subject}'
     msg['From']    = EMAIL_SENDER
@@ -132,6 +186,36 @@ def send_email(subject, body):
     except Exception as e:
         log(f"ERROR sending email: {e}")
         return False
+
+
+def fire(state, key, subject, body, hours=None):
+    """Send one alert if its cooldown has expired; record the time if it went out.
+
+    Same cooldown/state contract the counter checks above use inline — factored
+    out here because the per-location sensor checks would otherwise repeat it
+    once per sensor per condition.
+    """
+    if not cooldown_expired(state, key, hours):
+        log(f"{key} active but cooldown not expired")
+        return False
+    if send_email(subject, body):
+        state[key] = datetime.now().isoformat()
+        return True
+    return False
+
+
+def sensor_series():
+    """Per-location Shelly series via the dashboard's own reader (never raises).
+
+    Returns [] if the reader, its config, or the csv is unavailable — a missing
+    sensor pipeline must never stop the counter alerts from running.
+    """
+    try:
+        from features.temp_humidity_sensor.reader import load_sensor_series
+        return load_sensor_series()
+    except Exception as e:
+        log(f"Sensor series unavailable ({e}) — skipping sensor checks")
+        return []
 
 
 def read_latest_live():
@@ -351,10 +435,95 @@ def check_alerts():
         else:
             state.pop('counter_offline', None)
 
-    save_state(state)
+    # ── DISTRIBUTED SHELLY SENSORS ────────────────────────────────────────────
+    # Two conditions per location: gone silent, and last reading out of band.
+    # Locations are keyed by name so each one carries its own cooldown.
+    #
+    # A sensor that has NEVER reported is logged, not mailed: that is a
+    # deployment/config gap (a prefix in sensors.yaml with no device behind it),
+    # and mailing it would repeat forever with nothing anyone can fix by email.
+    for s in sensor_series():
+        loc = s.get('name') or 'unknown'
+        if not s.get('ts'):
+            log(f"Sensor '{loc}' has never reported — not alerting (check sensors.yaml)")
+            continue
+
+        try:
+            last_dt = datetime.strptime(s['ts'][-1], '%Y-%m-%d %H:%M:%S')
+        except (ValueError, TypeError):
+            log(f"Sensor '{loc}' has an unparseable timestamp — skipping")
+            continue
+        silent_h = (datetime.now() - last_dt).total_seconds() / 3600.0
+
+        # ── sensor silent ─────────────────────────────────────────────────────
+        if silent_h > SENSOR_SILENT_HOURS:
+            key = f'sensor_silent:{loc}'
+            body = (
+                f"ALERT: Sensor Not Reporting\n\n"
+                f"Location:     {loc}\n"
+                f"Last report:  {last_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Silent for:   {silent_h:.1f} hours\n"
+                f"Threshold:    > {SENSOR_SILENT_HOURS:.0f} hours\n\n"
+                f"This Shelly H&T has stopped reporting. Most likely a flat\n"
+                f"battery; also check the MQTT broker and that\n"
+                f"shelly_ht_logger.py is still running on noether (tmux session\n"
+                f"'wlc', window 'ht-logger').\n\n"
+                f"Timestamp:    {now_str}\n"
+                f"Location:     WLC High Bay (Wright Lab, Yale University)\n"
+            )
+            if fire(state, key,
+                    f"SENSOR SILENT: {loc} ({silent_h:.0f} h)", body,
+                    hours=SENSOR_SILENT_COOLDOWN_H):
+                fired = True
+            continue          # a silent sensor's last reading is not news
+
+        state.pop(f'sensor_silent:{loc}', None)
+
+        # ── sensor out of band ────────────────────────────────────────────────
+        # Only reached while the sensor is reporting, so the values are current.
+        # The Shellys log °C; thresholds are °F.
+        s_tc = next((v for v in reversed(s.get('temp') or []) if v is not None), None)
+        s_rh = next((v for v in reversed(s.get('rh')   or []) if v is not None), None)
+        s_tf = round(s_tc * 9 / 5 + 32, 1) if s_tc is not None else None
+
+        reasons = []
+        if s_tf is not None and s_tf < TEMP_LOW_F:
+            reasons.append(f"temperature {s_tf:.1f} degF ({s_tc:.1f} degC) "
+                           f"below {TEMP_LOW_F:.0f} degF")
+        if s_tf is not None and s_tf > TEMP_HIGH_F:
+            reasons.append(f"temperature {s_tf:.1f} degF ({s_tc:.1f} degC) "
+                           f"above {TEMP_HIGH_F:.0f} degF")
+        if s_rh is not None and s_rh < RH_LOW_PCT:
+            reasons.append(f"humidity {s_rh:.1f}% below {RH_LOW_PCT:.0f}%")
+        if s_rh is not None and s_rh > RH_HIGH_PCT:
+            reasons.append(f"humidity {s_rh:.1f}% above {RH_HIGH_PCT:.0f}%")
+
+        key = f'sensor_band:{loc}'
+        if reasons:
+            body = (
+                f"ALERT: Environment Out of Range at {loc}\n\n"
+                + ''.join(f"  - {r}\n" for r in reasons) +
+                f"\nReading taken: {last_dt.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"One location is outside the emergency band while the rest of\n"
+                f"the bay may look normal — check for a door left open, a local\n"
+                f"heat source, or an HVAC fault serving that area.\n\n"
+                f"Timestamp:    {now_str}\n"
+                f"Location:     WLC High Bay (Wright Lab, Yale University)\n"
+                f"Sensor:       Shelly H&T Gen3 ({loc})\n"
+            )
+            if fire(state, key, f"OUT OF RANGE at {loc}: {reasons[0]}", body):
+                fired = True
+        else:
+            state.pop(key, None)
+
+    if not DRY_RUN:
+        save_state(state)
     if not fired:
         log("All parameters within normal range.")
 
 
 if __name__ == '__main__':
+    DRY_RUN = '--dry-run' in sys.argv
+    if DRY_RUN:
+        log("DRY RUN — no email will be sent, and no cooldown will be recorded")
     check_alerts()
