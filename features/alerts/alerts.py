@@ -109,6 +109,12 @@ except ImportError:
         print("  features/alerts/alerts_secrets.py and fill in your Gmail details.")
         raise SystemExit(1)
 
+# Google displays an App Password as four space-separated groups
+# ("abcd efgh ijkl mnop") and accepts it with or without them, but a space or
+# newline picked up from a copy-paste or an editor fails as 535 BadCredentials,
+# which reads exactly like a wrong password. Normalise it here.
+EMAIL_PASSWORD = (EMAIL_PASSWORD or '').replace(' ', '').strip()
+
 ALERT_SUBJECT_PREFIX = '[WLC Clean Room]'
 
 # --dry-run: report what would be mailed, send nothing, and leave the cooldown
@@ -146,6 +152,8 @@ def save_state(state):
 
 def cooldown_expired(state, key, hours=None):
     """Return True if enough time has passed since the last alert for this key."""
+    if DRY_RUN:
+        return True     # a dry run must show every active condition, never hide
     last = state.get(key)
     if last is None:
         return True
@@ -186,6 +194,30 @@ def send_email(subject, body):
     except Exception as e:
         log(f"ERROR sending email: {e}")
         return False
+
+
+def send_test_email():
+    """One-off delivery check — proves credentials and routing work, nothing else.
+
+    Deliberately separate from check_alerts(): it touches no thresholds, reads no
+    data and records no cooldown, so testing delivery can never leave the alert
+    system in a changed state.
+    """
+    body = (
+        "This is a test message from the WLC High Bay alert system.\n\n"
+        "If you are reading this, the sender credentials and the recipient list\n"
+        "are correct, and real alerts will reach you.\n\n"
+        "If it arrived in spam, mark it 'not spam' NOW — otherwise every future\n"
+        "alert is filed away silently, which is worse than no alerting at all.\n\n"
+        f"Sent:   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"From:   {EMAIL_SENDER}\n"
+        f"To:     {', '.join(EMAIL_RECIPIENTS)}\n"
+        f"SMTP:   {SMTP_HOST}:{SMTP_PORT}\n"
+    )
+    ok = send_email('TEST - alert system configured correctly', body)
+    log('Test email sent — check the inbox AND the spam folder.' if ok else
+        'Test email FAILED — see the SMTP error above.')
+    return ok
 
 
 def fire(state, key, subject, body, hours=None):
@@ -523,7 +555,29 @@ def check_alerts():
 
 
 if __name__ == '__main__':
-    DRY_RUN = '--dry-run' in sys.argv
+    # argparse, not a manual sys.argv scan: an unrecognised flag must fail loudly.
+    # The manual version silently fell through to a REAL run, so a typo'd flag
+    # sent live alert mail while appearing to do something safe.
+    import argparse
+
+    _p = argparse.ArgumentParser(
+        description='WLC High Bay environmental alerts. '
+                    'With no options: check every condition and email any that fire. '
+                    'See features/alerts/README.md.')
+    _p.add_argument('--dry-run', action='store_true',
+                    help='report what WOULD be sent and send nothing: cooldowns are '
+                         'neither recorded nor respected, so every active condition '
+                         'is shown')
+    _p.add_argument('--test-email', action='store_true',
+                    help='send one test message to confirm delivery works, then exit '
+                         '(reads no data, changes no state)')
+    _args = _p.parse_args()
+
+    DRY_RUN = _args.dry_run
+
+    if _args.test_email:
+        raise SystemExit(0 if send_test_email() else 1)
+
     if DRY_RUN:
-        log("DRY RUN — no email will be sent, and no cooldown will be recorded")
+        log('DRY RUN — sending nothing; cooldowns neither recorded nor respected')
     check_alerts()

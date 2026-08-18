@@ -92,27 +92,39 @@ EMAIL_RECIPIENTS = ['you@yale.edu', 'advisor@yale.edu', 'labmate@yale.edu']
 (If the file is absent the script falls back to the `EMAIL_SENDER`,
 `EMAIL_PASSWORD` and `EMAIL_RECIPIENTS` environment variables.)
 
-### Step 3: Dry run — see what would be sent, send nothing
+### Step 3: Prove delivery works
+
+```bash
+python3 features/alerts/alerts.py --test-email
+```
+
+Sends one test message and exits. It reads no data, evaluates no thresholds and
+records no cooldown, so a delivery test can never leave the alert system in a
+changed state — and there is nothing to remember to undo afterwards.
+
+`535 5.7.8 BadCredentials` means the sender account rejected the password. See
+*Troubleshooting* below.
+
+### Step 4: Dry run — see what would be sent, send nothing
 
 ```bash
 python3 /home/rraut/particle_plus/features/alerts/alerts.py --dry-run
 ```
 
-Every alert that would fire is printed in full, no mail leaves the machine and
-the cooldown state file is left untouched. Use this to sanity-check the
-thresholds against real lab data before anything is delivered.
+Every alert that would fire is printed in full, no mail leaves the machine, and
+the cooldown state file is neither read nor written — an active cooldown cannot
+make a dry run report "nothing wrong" about a condition that is wrong. Use this
+to sanity-check thresholds against real lab data before anything is delivered.
 
-### Step 4: Test a real send
+### Step 5: One real run
 
 ```bash
 python3 /home/rraut/particle_plus/features/alerts/alerts.py
 ```
 
-Expect `All parameters within normal range.` To prove delivery works, briefly
-set `RH_LOW_PCT = 99.0`, run again, confirm the mail arrives (check spam and
-mark it not-spam), then set it back.
+Expect `All parameters within normal range.`
 
-### Step 5: Add to cron on noether
+### Step 6: Add to cron on noether
 
 Run `crontab -e` and add:
 
@@ -124,6 +136,39 @@ This runs the check every 10 minutes. The script is fast (reads CSV, checks
 values, exits) so cron overhead is negligible.
 
 ---
+
+## Troubleshooting
+
+**`535 5.7.8 Username and Password not accepted`** — the sender account rejected
+the credentials. In order of likelihood:
+
+1. You used the account's normal password. Google disabled plain-password SMTP
+   in 2022; only a 16-character **App Password** works.
+2. 2-Step Verification is not enabled on the sender account, so no App Password
+   exists to create. `myaccount.google.com` → Security → 2-Step Verification.
+3. The sender is an institution-managed account (`@yale.edu`) whose admin has
+   disabled App Passwords. Use a personal `@gmail.com` as the *sender* and keep
+   the Yale address as a *recipient* — recipients need no setup at all.
+4. `EMAIL_SENDER` is not the account the App Password was generated under.
+
+Isolate it from everything else with:
+
+```bash
+python3 -c "
+import smtplib, ssl
+s = smtplib.SMTP_SSL('smtp.gmail.com', 465, context=ssl.create_default_context())
+s.login('your.sender@gmail.com', 'abcdefghijklmnop')
+print('LOGIN OK'); s.quit()"
+```
+
+`534 5.7.9 Application-specific password required` means 2FA is on but you are
+still passing the account password.
+
+Spaces in the App Password are stripped automatically, so `abcd efgh ijkl mnop`
+and `abcdefghijklmnop` both work.
+
+**Mail sends but never arrives** — check spam and mark it not-spam once.
+Silently-filtered alerts are worse than no alerts.
 
 ## Self-check
 

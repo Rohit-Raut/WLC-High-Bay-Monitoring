@@ -10,6 +10,11 @@ data/measurement_archive.csv
 # Sync state tracker — local only
 data/counter_state.json
 
+# Alert runtime state + logs (features/alerts) — per-host, never committed
+data/alert_state.json
+alert_log.txt
+alert_cron.log
+
 # Old dashboard subdirectory (now generated at repo root instead)
 # Leading / anchors to repo root — does NOT match features/dashboard/
 /dashboard/
