@@ -708,8 +708,7 @@ def send_weekly_summary(days=7):
               "Location:   WLC High Bay (Wright Lab, Yale University)",
               '',
               "This report also proves the alert system is alive. If it stops",
-              "arriving, the cron entry or the mail path has failed — a silent",
-              "monitor and a healthy lab look identical until you need one.",
+              "arriving, the cron entry or the mail path has failed."
               ]
 
     ok = send_email(f"Weekly summary  {since.strftime('%b %d')} - {now.strftime('%b %d')}",
