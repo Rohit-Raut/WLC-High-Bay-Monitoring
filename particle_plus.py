@@ -824,9 +824,15 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     ch2_pm_js     = json.dumps(ch_pm[2])
     ch1_lbl       = ch_sizes.get(1, '0.3')
     ch2_lbl       = ch_sizes.get(2, '0.5')
-    live_ts_js    = json.dumps(live_ts)
-    temp_f_js     = json.dumps(live_temp_f)
-    rh_js         = json.dumps(live_rh_vals)
+    # env_live.csv series — PUBLIC page only. Its env chart is built from these
+    # (chart_interactions.js), but the local page's env section renders from
+    # ENV_SENSORS instead, so shipping them there was ~2.6 MB of the 5 MB page
+    # that nothing read. Emitted as [] (not removed) because the local JS still
+    # references the consts harmlessly. The Python lists stay populated either
+    # way — the top summary cards read their last value above.
+    live_ts_js    = json.dumps([] if local else live_ts)
+    temp_f_js     = json.dumps([] if local else live_temp_f)
+    rh_js         = json.dumps([] if local else live_rh_vals)
 
     # ── distributed Shelly temp/RH sensors (features/temp_humidity_sensor) ──
     # Missing/empty csv → empty list → env section renders sensor-less.
@@ -1727,9 +1733,18 @@ const IS_LOCAL  = {is_local_js};
 </body>
 </html>"""
 
+    # Write to a temp file and rename it into place. open(path,'w') truncates
+    # the live file to 0 and streams megabytes back in, so a request landing in
+    # that window got truncated HTML — the JS died mid-literal, no charts
+    # rendered, and the auto-refresh interval never re-armed, leaving the page
+    # dead until a manual reload. local_serve.py rebuilds on a background thread
+    # while serving the same file, so this raced routinely. os.replace() is
+    # atomic on POSIX: a reader sees the whole old file or the whole new one.
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, 'w') as f:
+    tmp_path = output_path + '.tmp'
+    with open(tmp_path, 'w') as f:
         f.write(html)
+    os.replace(tmp_path, output_path)
     log(f"Dashboard HTML written → {output_path}")
     return True
 

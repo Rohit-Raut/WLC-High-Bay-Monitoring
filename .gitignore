@@ -20,6 +20,9 @@ alert_cron.log
 /dashboard/
 misc/dashboard/
 
+# Scratch output from test_atomic_write.py — regenerated on every run
+.test_out/
+
 # Python
 __pycache__/
 *.pyc
