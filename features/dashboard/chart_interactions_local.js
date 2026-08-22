@@ -1038,12 +1038,15 @@ window._attachZoomOutButtonListeners = function () {
 // "refresh to latest" means re-fetching the page. To keep that smooth:
 //   • the selected time range is preserved across reloads (sessionStorage) so a
 //     refresh — auto or manual — never throws away the user's current zoom,
-//   • the page auto-reloads every 5 min (skipping a cycle while the Alerts panel
-//     is open, so it isn't yanked away mid-read) — matches the Shellys' ~5 min
-//     reporting cadence and local_serve.py's REGEN_INTERVAL_S,
+//   • the page auto-reloads on AUTO_REFRESH_MS (skipping a cycle while the Alerts
+//     panel is open, so it isn't yanked away mid-read) — keep it in step with
+//     local_serve.py's REGEN_INTERVAL_S, since reloading faster than the rebuild
+//     only re-renders the same data,
 //   • a manual refresh button is injected into the header (next to Time Range).
 //     Kept entirely here so particle_plus.py is untouched.
-var AUTO_REFRESH_MS = 5 * 60 * 1000;
+// TEMPORARY (2026-08-22): 30 s while verifying the refresh path.
+// Put back to 5 * 60 * 1000 afterwards, together with REGEN_INTERVAL_S.
+var AUTO_REFRESH_MS = 30 * 1000;
 var _refreshTimer   = null;
 
 function _restoreTimeRange() {

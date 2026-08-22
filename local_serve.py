@@ -18,9 +18,11 @@ SECURITY MODEL
     archive to anyone who can reach the machine.
 
 BEHAVIOR
-    * Regenerates index_local.html every 60 s from the full archive
-      (data/measurement_archive.csv), so the page's 60 s auto-reload always
-      shows fresh data while the daemon keeps sampling.
+    * Regenerates index_local.html every REGEN_INTERVAL_S seconds from the full
+      archive (data/measurement_archive.csv), so the page's auto-reload always
+      shows fresh data while the daemon keeps sampling. Keep that constant in
+      step with AUTO_REFRESH_MS in features/dashboard/chart_interactions_local.js
+      — a page that reloads faster than the rebuild just re-renders stale data.
     * index_local.html is gitignored — it never reaches GitHub.
     * Reuses particle_plus.generate_dashboard_html() with days=None /
       env_days=None / local=True (extended time ranges incl. "All data",
@@ -44,8 +46,10 @@ BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 BIND_ADDR = '127.0.0.1'          # loopback ONLY — see security note above
 LOCAL_HTML_NAME = 'index_local.html'
 LOCAL_HTML = os.path.join(BASE_DIR, LOCAL_HTML_NAME)
-REGEN_INTERVAL_S = 300           # 5 min — matches the page's auto-reload; the
-                                 # Shellys only report every ~5 min anyway
+REGEN_INTERVAL_S = 30            # TEMPORARY (2026-08-22): 30 s while verifying the
+                                 # refresh path. Put back to 300 (5 min) afterwards —
+                                 # the Shellys only report every ~5 min, so 30 s
+                                 # rebuilds 2.4 MB ten times to show the same data.
 
 sys.path.insert(0, BASE_DIR)
 import particle_plus as pp
