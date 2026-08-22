@@ -14,6 +14,27 @@
 //   Each step calls filterAndRender() which resets all charts to the exact
 //   selected window — no pixel-level drift, no out-of-bounds issues.
 
+// ── Array min/max WITHOUT spread ──────────────────────────────────────────────
+// Spreading an array into Math.max passes every element as a separate argument
+// and throws
+// "RangeError: Maximum call stack size exceeded" past ~124k elements in Chrome.
+// The full archive blew straight through that — 45k records × 6 channels gives
+// 155k count values — and because the call sits at top-level scope the whole
+// script died before rendering anything, leaving a dashboard with no charts at
+// all. Math.max.apply(null, arr) has the identical ceiling; a loop has none.
+// Used everywhere instead of spread, including on arrays that are small today,
+// so nobody has to reason about which ones are "small enough".
+function _arrMax(a) {
+  let m = -Infinity;
+  for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
+  return m;
+}
+function _arrMin(a) {
+  let m = Infinity;
+  for (let i = 0; i < a.length; i++) if (a[i] < m) m = a[i];
+  return m;
+}
+
 // ── Stable Y ranges — computed ONCE from the full dataset at page load ────────
 // Using all data (not the current time slice) means Y never jumps when the
 // dropdown changes or filterAndRender() is called again.
@@ -21,7 +42,7 @@
 // Particle counts (log scale).
 // Ceiling >= 8.0 keeps ISO 5–9 reference lines (3 520 – 35.2 M /m³) in view.
 const _allCountVals = COUNTS.flatMap(tr => tr.y).filter(v => v !== null && v > 0);
-const _rawCountMax  = _allCountVals.length ? Math.max(..._allCountVals) : 1e6;
+const _rawCountMax  = _allCountVals.length ? _arrMax(_allCountVals) : 1e6;
 const COUNTS_Y_RANGE = [1.5, Math.max(Math.log10(_rawCountMax) + 0.5, 8.0)];
 
 // PM mass — no longer using global PM_Y_MAX (dynamic log scale in local version)
@@ -37,14 +58,14 @@ const _SENS = (typeof ENV_SENSORS !== 'undefined' && Array.isArray(ENV_SENSORS))
 const _tempVals  = TEMP_F.concat(..._SENS.map(s => s.temp))
   .filter(v => v !== null && !isNaN(v));
 const TEMP_Y_RANGE = _tempVals.length
-  ? [Math.max(32,  Math.min(..._tempVals) - 5), Math.max(..._tempVals) + 5]
+  ? [Math.max(32,  _arrMin(_tempVals) - 5), _arrMax(_tempVals) + 5]
   : [60, 90];
 
 // Relative humidity (%).  ±5 % padding; clamped to [0, 100].
 const _rhVals   = RH_VALS.concat(..._SENS.map(s => s.rh))
   .filter(v => v !== null && !isNaN(v));
 const RH_Y_RANGE = _rhVals.length
-  ? [Math.max(0,   Math.min(..._rhVals) - 5), Math.min(100, Math.max(..._rhVals) + 5)]
+  ? [Math.max(0,   _arrMin(_rhVals) - 5), Math.min(100, _arrMax(_rhVals) + 5)]
   : [0, 100];
 
 // ── Theme-aware Plotly layout ─────────────────────────────────────────────────
@@ -685,7 +706,7 @@ function updateStats(i) {
   const fmt   = v => (v !== null && !isNaN(v))
     ? Math.round(v).toLocaleString() + ' /m³' : '--';
   const mean1 = ch1.length ? ch1.reduce((a, b) => a + b, 0) / ch1.length : null;
-  const peak1 = ch1.length ? Math.max(...ch1) : null;
+  const peak1 = ch1.length ? _arrMax(ch1) : null;
   // Tent target is ISO 8 — exceedance = >= 0.5 µm above the ISO 8 limit
   // (3,520,000 /m³). Counted on the plotted ≥0.5 µm series.
   const exc7  = ch2.filter(v => v > 3520000).length;
@@ -718,8 +739,8 @@ function calculatePMLogRange(pmTraces) {
     return [-2, 1];
   }
 
-  const rawMax = Math.max(...visibleVals);
-  const rawMin = Math.min(...visibleVals);
+  const rawMax = _arrMax(visibleVals);
+  const rawMin = _arrMin(visibleVals);
 
   // Log scale with padding: -0.3 decades below, +0.5 decades above
   // Floor at 0.01 to avoid log(0) issues
@@ -813,7 +834,7 @@ function filterAndRender() {
       if (DIST_BASE_COLORS) DIST[0].marker.color = DIST_BASE_COLORS.map(_traceColor);
     }
   }
-  const _distMax    = (DIST[0] && DIST[0].y.length) ? Math.max(...DIST[0].y) : 100;
+  const _distMax    = (DIST[0] && DIST[0].y.length) ? _arrMax(DIST[0].y) : 100;
   const _distLogMax = Math.log10(Math.max(_distMax, 1)) + 1.0;
   const p3 = Plotly.react('chart-dist', DIST,
     Object.assign({}, DARK, {
@@ -1044,9 +1065,7 @@ window._attachZoomOutButtonListeners = function () {
 //     only re-renders the same data,
 //   • a manual refresh button is injected into the header (next to Time Range).
 //     Kept entirely here so particle_plus.py is untouched.
-// TEMPORARY (2026-08-22): 30 s while verifying the refresh path.
-// Put back to 5 * 60 * 1000 afterwards, together with REGEN_INTERVAL_S.
-var AUTO_REFRESH_MS = 30 * 1000;
+var AUTO_REFRESH_MS = 5 * 60 * 1000;
 var _refreshTimer   = null;
 
 function _restoreTimeRange() {

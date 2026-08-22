@@ -3,7 +3,7 @@
 /particle_data_archive.csv
 /particle_data_live.csv
 /sync_log.txt
-
+/measurement_archive
 # Permanent archive — all particle measurements, local only (never pushed to GitHub)
 data/measurement_archive.csv
 

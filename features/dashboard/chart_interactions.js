@@ -13,6 +13,24 @@
 //   Each step calls filterAndRender() which resets all charts to the exact
 //   selected window — no pixel-level drift, no out-of-bounds issues.
 
+// ── Array min/max WITHOUT spread ──────────────────────────────────────────────
+// Spreading an array into Math.max passes every element as a separate argument
+// and throws "RangeError: Maximum call stack size exceeded" past ~124k elements
+// in Chrome, killing the whole script at top-level scope — the local dashboard
+// hit this at 45k records (155k count values) and rendered no charts at all.
+// This page is capped at 30 days so it has headroom, but it grows the same way.
+// Math.max.apply(null, arr) has the identical ceiling; a loop has none.
+function _arrMax(a) {
+  let m = -Infinity;
+  for (let i = 0; i < a.length; i++) if (a[i] > m) m = a[i];
+  return m;
+}
+function _arrMin(a) {
+  let m = Infinity;
+  for (let i = 0; i < a.length; i++) if (a[i] < m) m = a[i];
+  return m;
+}
+
 // ── Stable Y ranges — computed ONCE from the full dataset at page load ────────
 // Using all data (not the current time slice) means Y never jumps when the
 // dropdown changes or filterAndRender() is called again.
@@ -20,12 +38,12 @@
 // Particle counts (log scale).
 // Ceiling >= 8.0 keeps ISO 5–9 reference lines (3 520 – 35.2 M /m³) in view.
 const _allCountVals = COUNTS.flatMap(tr => tr.y).filter(v => v !== null && v > 0);
-const _rawCountMax  = _allCountVals.length ? Math.max(..._allCountVals) : 1e6;
+const _rawCountMax  = _allCountVals.length ? _arrMax(_allCountVals) : 1e6;
 const COUNTS_Y_RANGE = [1.5, Math.max(Math.log10(_rawCountMax) + 0.5, 8.0)];
 
 // PM mass (linear scale).  20 % headroom; floor at 5 µg/m³.
 const _allPMVals = PM.flatMap(tr => tr.y).filter(v => v !== null && v >= 0);
-const _rawPMMax  = _allPMVals.length ? Math.max(..._allPMVals) : 10;
+const _rawPMMax  = _allPMVals.length ? _arrMax(_allPMVals) : 10;
 const PM_Y_MAX   = Math.max(_rawPMMax * 1.2, 5);
 
 // Distributed Shelly sensors share the env chart axes — include their values
@@ -38,14 +56,14 @@ const _SENS = (typeof ENV_SENSORS !== 'undefined' && Array.isArray(ENV_SENSORS))
 const _tempVals  = TEMP_F.concat(..._SENS.map(s => s.temp))
   .filter(v => v !== null && !isNaN(v));
 const TEMP_Y_RANGE = _tempVals.length
-  ? [Math.max(32,  Math.min(..._tempVals) - 5), Math.max(..._tempVals) + 5]
+  ? [Math.max(32,  _arrMin(_tempVals) - 5), _arrMax(_tempVals) + 5]
   : [60, 90];
 
 // Relative humidity (%).  ±5 % padding; clamped to [0, 100].
 const _rhVals   = RH_VALS.concat(..._SENS.map(s => s.rh))
   .filter(v => v !== null && !isNaN(v));
 const RH_Y_RANGE = _rhVals.length
-  ? [Math.max(0,   Math.min(..._rhVals) - 5), Math.min(100, Math.max(..._rhVals) + 5)]
+  ? [Math.max(0,   _arrMin(_rhVals) - 5), Math.min(100, _arrMax(_rhVals) + 5)]
   : [0, 100];
 
 // ── Theme-aware Plotly layout ─────────────────────────────────────────────────
@@ -357,7 +375,7 @@ function updateStats(i) {
   const fmt   = v => (v !== null && !isNaN(v))
     ? Math.round(v).toLocaleString() + ' /m³' : '--';
   const mean1 = ch1.length ? ch1.reduce((a, b) => a + b, 0) / ch1.length : null;
-  const peak1 = ch1.length ? Math.max(...ch1) : null;
+  const peak1 = ch1.length ? _arrMax(ch1) : null;
   // Tent target is ISO 8 — exceedance = >= 0.5 µm above the ISO 8 limit
   // (3,520,000 /m³). Counted on the plotted ≥0.5 µm series.
   const exc7  = ch2.filter(v => v > 3520000).length;
@@ -454,7 +472,7 @@ function filterAndRender() {
       if (DIST_BASE_COLORS) DIST[0].marker.color = DIST_BASE_COLORS.map(_traceColor);
     }
   }
-  const _distMax    = (DIST[0] && DIST[0].y.length) ? Math.max(...DIST[0].y) : 100;
+  const _distMax    = (DIST[0] && DIST[0].y.length) ? _arrMax(DIST[0].y) : 100;
   const _distLogMax = Math.log10(Math.max(_distMax, 1)) + 1.0;
   const p3 = Plotly.react('chart-dist', DIST,
     Object.assign({}, DARK, {

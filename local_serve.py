@@ -36,6 +36,7 @@ Usage (on noether, e.g. inside tmux):
 """
 
 import argparse
+import gzip
 import os
 import sys
 import threading
@@ -46,10 +47,16 @@ BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 BIND_ADDR = '127.0.0.1'          # loopback ONLY — see security note above
 LOCAL_HTML_NAME = 'index_local.html'
 LOCAL_HTML = os.path.join(BASE_DIR, LOCAL_HTML_NAME)
-REGEN_INTERVAL_S = 30            # TEMPORARY (2026-08-22): 30 s while verifying the
-                                 # refresh path. Put back to 300 (5 min) afterwards —
-                                 # the Shellys only report every ~5 min, so 30 s
-                                 # rebuilds 2.4 MB ten times to show the same data.
+REGEN_INTERVAL_S = 300           # 5 min — the Shellys only report every ~5 min,
+                                 # so rebuilding faster just regenerates the same
+                                 # page. Keep in step with AUTO_REFRESH_MS in
+                                 # features/dashboard/chart_interactions_local.js.
+
+# gzip level 6: measured on the real 45k-record page (19.6 MB) it gives 8.4x in
+# 0.37 s. Level 9 costs 2.5 s for only 9 % more, level 1 gives 7.4x — 6 is the
+# knee. The page is viewed over an SSH tunnel, where 19.6 MB is the entire
+# reason a refresh takes seconds; 2.3 MB is not.
+GZIP_LEVEL = 6
 
 sys.path.insert(0, BASE_DIR)
 import particle_plus as pp
@@ -78,12 +85,56 @@ def _regen_loop():
             print(f'[local] WARNING: rebuild failed: {e}')
 
 
+# ── gzip cache ────────────────────────────────────────────────────────────────
+# SimpleHTTPRequestHandler sends everything uncompressed. The page is mostly
+# JSON digits, which gzip crushes ~8.4x, and it is read over an SSH tunnel where
+# that difference is seconds per refresh.
+#
+# Compressed once per rebuild rather than once per request: the file only
+# changes every REGEN_INTERVAL_S, but several people may be watching at once,
+# and re-running a 0.37 s compression for every one of them would be silly.
+# Keyed on (mtime_ns, size), which generate_dashboard_html's os.replace() bumps
+# on every rebuild, so the cache cannot go stale.
+_gz_cache = None                 # ((mtime_ns, size), gzipped bytes)
+_gz_lock  = threading.Lock()
+
+
+def _gzipped_page():
+    """Gzip of index_local.html, recompressed only when the file changes."""
+    global _gz_cache
+    try:
+        stat = os.stat(LOCAL_HTML)
+    except OSError:
+        return None                                  # no page yet — fall back
+    key = (stat.st_mtime_ns, stat.st_size)
+
+    cached = _gz_cache                               # fast path, no lock
+    if cached is not None and cached[0] == key:
+        return cached[1]
+
+    with _gz_lock:
+        if _gz_cache is None or _gz_cache[0] != key:  # re-check: another thread
+            with open(LOCAL_HTML, 'rb') as f:         # may have just done it
+                _gz_cache = (key, gzip.compress(f.read(), GZIP_LEVEL))
+        return _gz_cache[1]
+
+
 class LocalHandler(http.server.SimpleHTTPRequestHandler):
     """Serves the repo dir but maps the root URL to index_local.html."""
 
     def do_GET(self):
         if self.path in ('/', '/index.html'):
-            self.path = '/' + LOCAL_HTML_NAME
+            if 'gzip' in self.headers.get('Accept-Encoding', ''):
+                body = _gzipped_page()
+                if body is not None:
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/html; charset=utf-8')
+                    self.send_header('Content-Encoding', 'gzip')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+            self.path = '/' + LOCAL_HTML_NAME        # no gzip → serve the file
         return super().do_GET()
 
     def do_HEAD(self):
