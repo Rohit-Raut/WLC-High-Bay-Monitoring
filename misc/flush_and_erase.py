@@ -40,9 +40,13 @@ from datetime import datetime
 
 from pymodbus.client import ModbusTcpClient
 
+# This script lives in misc/, one level below the repo root — Python puts only
+# THIS directory on sys.path, so the repo root has to be added explicitly for
+# particle_plus / features to be importable, from any working directory.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Reuse the daemon's proven implementation (same decoders, same CSV schema,
-# same erase + sync-state reset). Python puts this script's directory on
-# sys.path, so this import works regardless of where you launch from.
+# same erase + sync-state reset).
 import particle_plus as pp
 # Same sync-state tracking the daemon uses, so we never double-save records that
 # are already in the archive (e.g. running this twice, or after the daemon synced).
