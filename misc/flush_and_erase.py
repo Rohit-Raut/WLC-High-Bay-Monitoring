@@ -47,6 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Reuse the daemon's proven implementation (same decoders, same CSV schema,
 # same erase + sync-state reset).
+
 import particle_plus as pp
 # Same sync-state tracking the daemon uses, so we never double-save records that
 # are already in the archive (e.g. running this twice, or after the daemon synced).
@@ -56,7 +57,7 @@ from features.data_manager import get_last_synced, set_last_synced
 COUNTER_IP       = pp.COUNTER_IP
 PORT             = pp.PORT
 OUTPUT_CSV       = pp.ARCHIVE_CSV     # same local-only archive the daemon writes
-ERASE_AFTER_SYNC = False              # set True ONLY after confirming the data
+ERASE_AFTER_SYNC = True             # set True ONLY after confirming the data
 
 # Network resilience knobs (tune up for a flaky link).
 TIMEOUT          = 10   # seconds per modbus request (particle_plus default = 5)
