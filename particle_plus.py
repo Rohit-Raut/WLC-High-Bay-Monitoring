@@ -75,6 +75,14 @@ HOLD_TIME_S         = _cfg('sampling', 'hold_time_s', 0)
 DELAY_TIME_S        = _cfg('sampling', 'delay_time_s', 5)
 CYCLES              = _cfg('sampling', 'cycles', 0)
 
+# Where the counter physically is. The instrument's own location register only
+# ever reports a useless "Location 1", so this label is stamped onto every
+# record instead — the archive then says which tent each measurement came from,
+# and the dashboard reads it back out of the csv (never from this global).
+# Set per run:  python3 particle_plus.py --all --location "Clean tent 1"
+LOCATION_DEFAULT    = 'Assembly Clean Tent'
+LOCATION            = LOCATION_DEFAULT
+
 # sync/erase
 ERASE_AFTER_SYNC    = _cfg('sync', 'erase_after_sync', False)
 MIN_RECORDS_TO_SYNC = _cfg('sync', 'min_records_to_sync', 1)
@@ -346,8 +354,12 @@ def read_latched_record(client):
     r = client.read_holding_registers(address=9013, count=9)
     data['time'] = decode_string(r.registers) if not r.isError() else ''
 
+    # The counter's own location register is never configured in the field (all
+    # 45,130 archived records read "Location 1"), so LOCATION — set by
+    # --location, default LOCATION_DEFAULT — is what actually gets stored.
     r = client.read_holding_registers(address=9022, count=21)
-    data['location'] = decode_string(r.registers) if not r.isError() else ''
+    data['location'] = LOCATION or (decode_string(r.registers)
+                                    if not r.isError() else '')
 
     r = client.read_holding_registers(address=9074, count=2)
     data['sample_duration_s'] = (round(decode_float(r.registers), 2)
@@ -686,6 +698,22 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
                  for i, vals in ch_pm.items()}
     flow_vals = [sf(r.get('flow_CFM')) if r is not None else None for r in _plot_records]
 
+    # ── location run-length spans ────────────────────────────────────────────
+    # [[start_index, name], ...] against _plot_timestamps. The label only
+    # changes when the daemon is restarted somewhere new, so this stays a
+    # handful of entries; a flat per-record array would add ~1.1 MB of the
+    # same repeated string to the page (see the Change-5 page-size work).
+    # A record with a blank location continues the previous span rather than
+    # breaking it — unknown means "no reason to think it moved".
+    _loc_spans = []
+    for _i, _r in enumerate(_plot_records):
+        _loc = (_r.get('location') or '').strip() if _r is not None else ''
+        if not _loc:
+            continue
+        if not _loc_spans or _loc_spans[-1][1] != _loc:
+            _loc_spans.append([_i, _loc])
+    loc_spans_js = json.dumps(_loc_spans)
+
     # ── env snapshot CSV: counter only stores temp/RH in the live reading (record 0),
     #    not in historical records — read ENV_SNAPSHOT_CSV for the env chart/cards ──
     live_cutoff = (datetime.now() - timedelta(days=env_days)) if env_days is not None else None
@@ -933,6 +961,14 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     # sits in pm_panel_html above; both rows drive the SAME visibility state.
     ch_legend_counts_html = ('<div id="legend-counts" class="ch-legend"></div>'
                              if local else '')
+
+    # Where the counter was during the SELECTED window — filled client-side from
+    # LOC_SPANS on every render, so changing Time Range re-answers it. Left empty
+    # here (and `.chart-loc:empty` collapses it) so a dataset with no location
+    # data costs no vertical space. LOCAL only: the public page is pinned to one
+    # TV viewport with no scrolling.
+    loc_line_html = ('<div id="chart-loc" class="chart-loc"></div>'
+                     if local else '')
 
     # Environment panel — LOCAL gets the per-sensor card grid (View B) with a
     # click-through cohort view (View C); PUBLIC keeps the classic single chart.
@@ -1581,6 +1617,15 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
   .ch-line {{ width: 18px; height: 3px; border-radius: 2px; flex: none; }}
   /* unticked: hollow circle + dimmed row — the trace is gone from both charts */
   .ch-item.off {{ opacity: 0.42; }}
+  /* Location of the counter for the selected window. Deliberately quiet — it
+     sits between the tick legend and the plot and must never compete with the
+     data. Collapses entirely when JS leaves it empty (no location in the csv). */
+  .chart-loc {{ font-size: 11px; line-height: 1.4; color: var(--text-secondary);
+    margin: 0 0 7px 6px; letter-spacing: .2px; }}
+  .chart-loc:empty {{ display: none; margin: 0; }}
+  .chart-loc .loc-k {{ opacity: .65; }}
+  .chart-loc .loc-v {{ color: var(--text-primary); opacity: .78; }}
+  .chart-loc .loc-arrow {{ opacity: .5; padding: 0 2px; }}
   /* ── env sensor cards + cohort view (LOCAL only — public lacks the markup) ── */
   .chart-title-row {{ display: flex; align-items: center; justify-content: space-between;
     gap: 10px; margin-bottom: 8px; }}
@@ -1696,6 +1741,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
 <div class="chart-panel main-panel">
   <div class="chart-title">Particle Concentration Over Time &nbsp;&#8212; all 6 size channels (log scale, <span class="u">counts / m&#179;</span>, ISO 14644-1 reference lines shown for 0.5 <span class="u">&micro;m</span>)</div>
   {ch_legend_counts_html}
+  {loc_line_html}
   <div id="chart-counts" style="height:360px"></div>
 </div>
 
@@ -1723,6 +1769,7 @@ const TEMP_F   = {temp_f_js};
 const RH_VALS  = {rh_js};
 const ENV_SENSORS = {env_sensors_js};
 const ISO_LINES = {iso_lines_js};
+const LOC_SPANS = {loc_spans_js};
 const IS_LOCAL  = {is_local_js};
 </script>
 <script>
@@ -2262,7 +2309,15 @@ def main():
                         help='Gracefully stop a running --all instance')
     parser.add_argument('--trim',      action='store_true',
                         help=f'Flush + erase counter if records > TRIM_CAP ({TRIM_CAP})')
+    parser.add_argument('--location',  default=LOCATION_DEFAULT,
+                        help='Where the counter physically is; stamped onto '
+                             f'every record (default: "{LOCATION_DEFAULT}")')
     args = parser.parse_args()
+
+    # Stamped into data['location'] by read_latched_record on every record read.
+    global LOCATION
+    LOCATION = args.location.strip() or LOCATION_DEFAULT
+    log(f"Location: {LOCATION}")
 
     os.makedirs(BASE_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)

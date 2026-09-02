@@ -698,6 +698,47 @@ function isoAnnotations() {
   }));
 }
 
+// ── Counter location for the selected window ─────────────────────────────────
+// LOC_SPANS is run-length encoded — [[startIndex, name], …] against TS — because
+// the label only changes when the daemon restarts somewhere new. A span covers
+// from its own start index until the next span begins.
+//
+// The window is always [i0 … end of data], so a span is in view iff it ends at
+// or after i0. Names are de-duplicated keeping the LAST occurrence, so where the
+// counter is NOW is always the rightmost entry even if it moved back and forth.
+function _locationsInWindow(i0) {
+  if (typeof LOC_SPANS === 'undefined' || !Array.isArray(LOC_SPANS)) return [];
+  const out = [];
+  for (let k = 0; k < LOC_SPANS.length; k++) {
+    const end = (k + 1 < LOC_SPANS.length) ? LOC_SPANS[k + 1][0] - 1 : TS.length - 1;
+    if (end < i0) continue;                       // span ended before the window
+    const name = LOC_SPANS[k][1];
+    const seen = out.indexOf(name);
+    if (seen !== -1) out.splice(seen, 1);         // keep the later mention
+    out.push(name);
+  }
+  return out;
+}
+
+function _esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// One quiet line above the plot. Empty string when there is nothing to say —
+// `.chart-loc:empty` then collapses it so it costs no vertical space.
+function renderLocation(i0) {
+  const el = document.getElementById('chart-loc');
+  if (!el) return;                                 // public page has no such div
+  const locs = _locationsInWindow(i0);
+  if (!locs.length) { el.innerHTML = ''; return; }
+  // An arrow, not a comma: two names in one window means the counter MOVED
+  // during it, and the data on either side was taken somewhere different.
+  const body = locs.map(l => '<span class="loc-v">' + _esc(l) + '</span>')
+                   .join('<span class="loc-arrow">&rarr;</span>');
+  el.innerHTML = '<span class="loc-k">Location:</span> ' + body;
+}
+
 function updateStats(i) {
   const ts    = TS.slice(i);
   const ch1   = COUNTS[0].y.slice(i).filter(v => v !== null && v !== undefined);
@@ -860,6 +901,7 @@ function filterAndRender() {
   const p4 = renderEnv(mins, DARK);
 
   updateStats(i);
+  renderLocation(i);
 
   return Promise.all([p1, p2, p3, p4]);
 }

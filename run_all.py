@@ -12,6 +12,11 @@ Usage (on noether, after stopping any old sessions running these programs):
     python3 run_all.py          # creates the session, detached
     tmux attach -t wlc          # watch; Ctrl-b 0/1/2 switches windows
 
+    # tell the logger where the counter physically is — this label is stamped
+    # onto every record it writes, so the archive says which tent the data
+    # came from. Omitted → particle_plus.py's default ("Assembly Clean Tent").
+    python3 run_all.py --location "Clean tent 1"
+
 The script only sets up tmux and exits — the programs keep running inside
 the session. If a program dies, its window stays open showing the traceback
 (a fresh shell is left behind so the scrollback survives); restart just that
@@ -23,19 +28,31 @@ It refuses to run if a 'wlc' session already exists, and warns (never kills)
 if it sees one of the programs already running outside the session.
 """
 
+import argparse
 import os
+import shlex
 import subprocess
 import sys
 
 SESSION  = 'wlc'
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# window name → command (run from the repo root)
-PROGRAMS = [
-    ('counter',   'python3 particle_plus.py --all'),
-    ('server',    'python3 local_serve.py --port=9900'),
-    ('ht-logger', 'python3 features/temp_humidity_sensor/shelly_ht_logger.py'),
-]
+
+def programs(location=None):
+    """window name → command (run from the repo root).
+
+    `location` is forwarded to particle_plus.py, which owns the default — so
+    the label is defined in exactly one place. shlex.quote is required: tmux
+    runs these through a shell, and locations have spaces ("Clean tent 1").
+    """
+    counter = 'python3 particle_plus.py --all'
+    if location:
+        counter += f' --location {shlex.quote(location)}'
+    return [
+        ('counter',   counter),
+        ('server',    'python3 local_serve.py --port=9900'),
+        ('ht-logger', 'python3 features/temp_humidity_sensor/shelly_ht_logger.py'),
+    ]
 
 
 def tmux(*args, check=True):
@@ -60,6 +77,15 @@ def warn_if_already_running(cmd):
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description='Launch the whole WLC monitoring stack in one tmux session')
+    parser.add_argument('--location', default=None,
+                        help='Where the counter physically is, stamped onto '
+                             'every record (e.g. "Clean tent 1"). Default is '
+                             'set by particle_plus.py.')
+    args = parser.parse_args()
+    PROGRAMS = programs(args.location)
+
     if session_exists():
         sys.exit(f"tmux session '{SESSION}' already exists — attach with "
                  f"'tmux attach -t {SESSION}' or remove it first with "
