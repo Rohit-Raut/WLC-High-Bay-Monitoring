@@ -205,17 +205,29 @@ def _ssl_context():
     return ssl.create_default_context()
 
 
-def send_email(subject, body):
-    """Send a plain-text alert email via SMTP SSL.
+def send_email(subject, body, html=None):
+    """Send an alert email via SMTP SSL, as multipart text + HTML when `html` is given.
 
-    With --dry-run nothing is sent: the alert is logged instead and reported as
-    delivered, so a run on real data shows exactly who would have been mailed
-    and why. Use it to verify thresholds before adding the cron entry.
+    The plain-text `body` is always set as the primary content, so a text-only
+    client (or a spam filter that reads text) still sees a complete, aligned
+    report; `html` is added as the richer alternative most clients display.
+
+    With --dry-run nothing is sent: the text is logged and, when an HTML body is
+    supplied, written to alert_preview.html so the design can be eyeballed in a
+    browser before anything is delivered.
     """
     if DRY_RUN:
         log(f"DRY RUN — would send to {', '.join(EMAIL_RECIPIENTS)}: {subject}")
         for line in body.strip().splitlines():
             log(f"  | {line}")
+        if html:
+            try:
+                preview = os.path.join(BASE_DIR, 'alert_preview.html')
+                with open(preview, 'w') as f:
+                    f.write(html)
+                log(f"DRY RUN — HTML preview written to {preview}")
+            except OSError as e:
+                log(f"DRY RUN — could not write HTML preview: {e}")
         return True
 
     msg = EmailMessage()
@@ -223,6 +235,8 @@ def send_email(subject, body):
     msg['From']    = EMAIL_SENDER
     msg['To']      = ', '.join(EMAIL_RECIPIENTS)
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype='html')
 
     context = _ssl_context()
     try:
@@ -339,7 +353,8 @@ def gather_readings():
     source = live if live is not None else meas
 
     r = {'have_data': source is not None, 'rh': None, 'temp_c': None, 'temp_f': None,
-         'ch1_m3': None, 'last_meas_dt': None, 'offline_min': None, 'sensors': []}
+         'ch1_m3': None, 'last_meas_dt': None, 'offline_min': None, 'sensors': [],
+         'meas_row': meas, 'iso': _iso_classify(meas)}
 
     if source is not None:
         r['rh']     = safe_float(source.get('RH_pct'))
@@ -496,8 +511,102 @@ def evaluate(r):
 # ── Formatting the mail ──────────────────────────────────────────────────────
 
 DASHBOARD_URL = 'https://rohit-raut.github.io/WLC-High-Bay-Monitoring/'
+MANUAL_URL    = 'https://github.com/Rohit-Raut/WLC-High-Bay-Monitoring'
 COUNTER_HINT  = '10.66.66.68:502'
 _RULE = '-' * 68
+
+
+# ── ISO 14644-1:2015 classification (mirrors particle_plus.py) ────────────────
+# Keyed by (class, size_um) → max CUMULATIVE particles/m³. The class is the most
+# stringent (lowest) one every measured channel still satisfies. Tent target is
+# ISO 8: <=7 is comfortably clean (green), 8 is at the line (amber), 9+ is worse
+# than the worst classified level (red).
+_ISO_LIMITS = {
+    (3, 0.3): 102,      (3, 0.5): 35,       (3, 1.0): 8,
+    (4, 0.3): 1020,     (4, 0.5): 352,      (4, 1.0): 83,
+    (5, 0.3): 10200,    (5, 0.5): 3520,     (5, 1.0): 832,    (5, 5.0): 29,
+    (6, 0.3): 102000,   (6, 0.5): 35200,    (6, 1.0): 8320,   (6, 5.0): 293,
+    (7,       0.5): 352000,   (7, 1.0): 83200,   (7, 5.0): 2930,
+    (8,       0.5): 3520000,  (8, 1.0): 832000,  (8, 5.0): 29300,
+    (9,       0.5): 35200000, (9, 1.0): 8320000, (9, 5.0): 293000,
+}
+
+
+def _iso_classify(rec):
+    """(class|None, label, tier) from a measurement row's cumulative counts.
+
+    tier is 'ok' / 'warn' / 'fault' / 'mute', matching the dashboard badge.
+    """
+    if not rec:
+        return (None, 'ISO —', 'mute')
+    measured = {}
+    for ci in range(1, 7):
+        sz   = safe_float(rec.get(f'ch{ci}_size_um'))
+        conc = safe_float(rec.get(f'ch{ci}_sum_m3'))
+        if sz is not None and conc is not None:
+            measured[round(sz, 1)] = conc
+    cls = None
+    for c in range(1, 10):
+        applicable = [(sz, lim) for (cc, sz), lim in _ISO_LIMITS.items()
+                      if cc == c and sz in measured]
+        if applicable and all(measured[sz] <= lim for sz, lim in applicable):
+            cls = c
+            break
+    if cls is None:
+        return (None, 'ISO —', 'mute')
+    tier = 'ok' if cls <= 7 else ('warn' if cls == 8 else 'fault')
+    return (cls, f'ISO {cls}', tier)
+
+
+# ── HTML mail styling ─────────────────────────────────────────────────────────
+# Email engines vary wildly; inline styles on <table> layout are the only thing
+# that renders consistently. Columns line up because the CLIENT lays out the
+# table — not because of monospace padding, which is what made the old text mail
+# ragged the moment a client showed it in a proportional font.
+_C = {
+    'ink':   '#1f2933', 'muted': '#64748b', 'line': '#e2e8f0',
+    'panel': '#ffffff', 'page':  '#eef2f6', 'head': '#0f2540', 'headsub': '#9fb3c8',
+    'ok':    '#15803d', 'okbg':    '#eaf7ef',
+    'warn':  '#b45309', 'warnbg':  '#fdf5e6',
+    'fault': '#b91c1c', 'faultbg': '#fdecec',
+    'info':  '#1d4ed8', 'infobg':  '#eaf0fd',
+}
+_TIER = {'ok': ('ok', 'okbg'), 'warn': ('warn', 'warnbg'),
+         'fault': ('fault', 'faultbg'), 'info': ('info', 'infobg'),
+         'mute': ('muted', 'line')}
+_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+_TH   = (f'padding:7px 10px;font:600 11px/1.3 {_FONT};color:#64748b;'
+         'text-transform:uppercase;letter-spacing:.6px;border-bottom:2px solid #e2e8f0;')
+_TD   = (f'padding:9px 10px;font:400 14px/1.45 {_FONT};color:#1f2933;'
+         'border-bottom:1px solid #eef2f6;')
+
+
+def _esc(s):
+    return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _pill(text, tier):
+    fg, bg = _C[_TIER[tier][0]], _C[_TIER[tier][1]]
+    return (f'<span style="display:inline-block;padding:3px 11px;border-radius:999px;'
+            f'background:{bg};color:{fg};font:600 12px/1.5 {_FONT};'
+            f'white-space:nowrap;">{_esc(text)}</span>')
+
+
+def _card(title, inner, accent='info'):
+    fg = _C[_TIER[accent][0]]
+    return (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="background:{_C["panel"]};border:1px solid {_C["line"]};'
+        f'border-radius:10px;margin:0 0 14px;"><tr><td style="padding:15px 17px;">'
+        f'<div style="font:700 12px/1.2 {_FONT};letter-spacing:1.2px;'
+        f'text-transform:uppercase;color:{fg};margin-bottom:11px;">{_esc(title)}</div>'
+        f'{inner}</td></tr></table>')
+
+
+def _row(cells):
+    """cells: list of (html, align) -> a <tr> of <td>s."""
+    return '<tr>' + ''.join(
+        f'<td align="{al}" style="{_TD}">{html}</td>' for html, al in cells) + '</tr>'
 
 
 def _ago(dt):
@@ -581,7 +690,7 @@ def digest_body(due, r, now_str):
         head.append('')
 
     tail = ['', conditions_block(r), '', _RULE,
-            f"Dashboard:  {DASHBOARD_URL}",
+            f"Instruction Manual:  {MANUAL_URL}",
             f"Sent:       {now_str}",
             "Location:   WLC High Bay (Wright Lab, Yale University)",
             "Instrument: Particles Plus Model 7301",
@@ -590,6 +699,227 @@ def digest_body(due, r, now_str):
             f"{COOLDOWN_HOURS} h while it stays active.",
             ]
     return '\n'.join(head + tail)
+
+
+# ── HTML rendering of the same content ───────────────────────────────────────
+
+def _alert_label(key):
+    """A friendly name for a cooldown key ('sensor_silent:Entrance' -> ...)."""
+    base = {'rh_low': 'Low humidity', 'rh_high': 'High humidity',
+            'temp_low': 'Low temperature', 'temp_high': 'High temperature',
+            'particle_high': 'High particle count', 'counter_offline': 'Counter offline'}
+    if ':' in key:
+        kind, loc = key.split(':', 1)
+        pretty = {'sensor_silent': 'Sensor silent',
+                  'sensor_band': 'Out of range'}.get(kind, kind)
+        return f'{pretty} — {loc}'
+    return base.get(key, key)
+
+
+def _html_conditions(r):
+    """The CURRENT CONDITIONS table, colour-coded, as an HTML card."""
+    head = ('<tr>'
+            f'<th align="left"  style="{_TH}">Location</th>'
+            f'<th align="right" style="{_TH}">Temp</th>'
+            f'<th align="right" style="{_TH}">Humidity</th>'
+            f'<th align="left"  style="{_TH}">Status</th></tr>')
+    rows = []
+
+    has_env = r.get('temp_f') is not None or r.get('rh') is not None
+    t = f"{r['temp_f']:.1f}&deg;F" if r.get('temp_f') is not None else '&mdash;'
+    h = f"{r['rh']:.0f}%"          if r.get('rh')     is not None else '&mdash;'
+    off = r.get('offline_min')
+    if off is not None and off > OFFLINE_ALERT_MIN:
+        status = _pill(f'Offline {off / 60:.0f} h', 'fault')
+    elif not has_env:
+        status = _pill('No data', 'mute')
+    else:
+        status = _pill('Live', 'ok')
+    cls, iso_label, iso_tier = r.get('iso') or (None, 'ISO —', 'mute')
+    name = f'Particle&nbsp;Counter &nbsp; {_pill(iso_label, iso_tier)}'
+    rows.append(_row([(name, 'left'), (t, 'right'), (h, 'right'), (status, 'left')]))
+
+    for s in r.get('sensors') or []:
+        if s['never']:
+            rows.append(_row([(_esc(s['name']), 'left'), ('&mdash;', 'right'),
+                              ('&mdash;', 'right'), (_pill('Never reported', 'mute'), 'left')]))
+            continue
+        silent = s['silent_h'] is not None and s['silent_h'] > SENSOR_SILENT_HOURS
+        if silent:
+            rows.append(_row([(_esc(s['name']), 'left'), ('&mdash;', 'right'),
+                              ('&mdash;', 'right'),
+                              (_pill(f"Silent {s['silent_h']:.0f} h", 'fault'), 'left')]))
+            continue
+        st = f"{s['temp_f']:.1f}&deg;F" if s['temp_f'] is not None else '&mdash;'
+        sh = f"{s['rh']:.0f}%"          if s['rh']     is not None else '&mdash;'
+        tier = 'ok'
+        if s['last_dt'] is not None:
+            mins = (datetime.now() - s['last_dt']).total_seconds() / 60
+            tier = 'ok' if mins < 60 else ('warn' if mins < 360 else 'fault')
+        rows.append(_row([(_esc(s['name']), 'left'), (st, 'right'), (sh, 'right'),
+                          (_pill(_ago(s['last_dt']), tier), 'left')]))
+
+    if not r.get('sensors'):
+        rows.append(f'<tr><td colspan="4" style="{_TD}color:{_C["muted"]};">'
+                    'No distributed sensors configured</td></tr>')
+
+    table = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+             f'{head}{"".join(rows)}</table>')
+    return _card('Current Conditions', table, accent='info')
+
+
+def _html_active_state(state):
+    """ALERTS CURRENTLY ACTIVE — a green all-clear, or a red list."""
+    if not state:
+        inner = (f'<table role="presentation" width="100%"><tr>'
+                 f'<td style="padding:4px 2px;font:400 14px/1.5 {_FONT};color:{_C["ink"]};">'
+                 f'<span style="color:{_C["ok"]};font-size:20px;vertical-align:-2px;">&#10003;</span> '
+                 f'<b style="color:{_C["ok"]};font-size:15px;">All clear</b>'
+                 f'<div style="color:{_C["muted"]};font-size:13px;margin-top:3px;">'
+                 f'No conditions are currently in alert.</div></td></tr></table>')
+        return _card('Alerts Currently Active', inner, accent='ok')
+    rows = [_row([(_pill(_alert_label(k), 'fault'), 'left'),
+                  (f'since {w[:19].replace("T", " ")}', 'right')])
+            for k, w in sorted(state.items())]
+    table = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+             f'{"".join(rows)}</table>')
+    return _card('Alerts Currently Active', table, accent='fault')
+
+
+def _statrow(label, unit, st, dp=1):
+    if st is None:
+        vals = f'<td colspan="3" style="{_TD}color:{_C["muted"]};">no data</td>'
+    else:
+        vals = ''.join(f'<td align="right" style="{_TD}">{v:,.{dp}f}</td>' for v in st)
+    return (f'<tr><td style="{_TD}"><b>{label}</b>'
+            f'<div style="color:#94a3b8;font-size:11px;">{unit}</div></td>{vals}</tr>')
+
+
+def _html_weekly_stats(nrows, temps_f, rhs, ch1s):
+    caption = (f'<div style="font:400 13px/1.5 {_FONT};color:{_C["muted"]};margin-bottom:10px;">'
+               f'<b style="color:{_C["ink"]};font-size:15px;">{nrows:,}</b> samples this week</div>')
+    head = ('<tr>'
+            f'<th align="left"  style="{_TH}">Metric</th>'
+            f'<th align="right" style="{_TH}">Min</th>'
+            f'<th align="right" style="{_TH}">Mean</th>'
+            f'<th align="right" style="{_TH}">Max</th></tr>')
+    body = (_statrow('Temperature', '&deg;F', _stats(temps_f)) +
+            _statrow('Humidity', '% RH', _stats(rhs), 0) +
+            _statrow('Particles', '/m&sup3; &ge;0.3&micro;m', _stats(ch1s), 0))
+    table = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+             f'{head}{body}</table>')
+    warn = ''
+    if not nrows:
+        warn = (f'<div style="background:{_C["faultbg"]};color:{_C["fault"]};'
+                f'border-left:4px solid {_C["fault"]};padding:10px 13px;border-radius:4px;'
+                f'font:600 13px/1.5 {_FONT};margin-top:11px;">'
+                'No samples this week — the counter or the logger was down.</div>')
+    return _card('Particle Counter · 7-Day Statistics', caption + table + warn, accent='info')
+
+
+def _html_sensor_table(series):
+    head = ('<tr>'
+            f'<th align="left"  style="{_TH}">Location</th>'
+            f'<th align="right" style="{_TH}">Reports</th>'
+            f'<th align="right" style="{_TH}">Temp &deg;F&nbsp;(min/mean/max)</th>'
+            f'<th align="right" style="{_TH}">RH&nbsp;%&nbsp;(min/mean/max)</th></tr>')
+    rows = []
+    for s in series:
+        n = len(s.get('ts') or [])
+        if not n:
+            rows.append(f'<tr><td style="{_TD}">{_esc(s["name"])}</td>'
+                        f'<td align="right" style="{_TD}">0</td>'
+                        f'<td colspan="2" style="{_TD}color:{_C["muted"]};">'
+                        'no reports this week</td></tr>')
+            continue
+        tf = [round(t * 9 / 5 + 32, 1) for t in (s.get('temp') or []) if t is not None]
+        st, sh = _stats(tf), _stats(s.get('rh') or [])
+        ttxt = f'{st[0]:.1f} / {st[1]:.1f} / {st[2]:.1f}' if st else '&mdash;'
+        htxt = f'{sh[0]:.0f} / {sh[1]:.0f} / {sh[2]:.0f}' if sh else '&mdash;'
+        rows.append(_row([(_esc(s['name']), 'left'), (f'{n:,}', 'right'),
+                          (ttxt, 'right'), (htxt, 'right')]))
+    if not series:
+        rows.append(f'<tr><td colspan="4" style="{_TD}color:{_C["muted"]};">'
+                    'No distributed sensors configured</td></tr>')
+    table = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+             f'{head}{"".join(rows)}</table>')
+    return _card('Sensor Locations', table, accent='info')
+
+
+def _html_alerts(due):
+    """Each active condition as its own red-accented card."""
+    cards = []
+    for a in due:
+        fg, bg = _C['fault'], _C['faultbg']
+        kv = (f'<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:8px;">'
+              f'<tr><td style="font:600 12px/1.6 {_FONT};color:{_C["muted"]};'
+              f'padding-right:12px;vertical-align:top;">Reading</td>'
+              f'<td style="font:400 14px/1.6 {_FONT};color:{_C["ink"]};">{_esc(a["reading"])}</td></tr>'
+              f'<tr><td style="font:600 12px/1.6 {_FONT};color:{_C["muted"]};'
+              f'padding-right:12px;vertical-align:top;">Limit</td>'
+              f'<td style="font:400 14px/1.6 {_FONT};color:{_C["ink"]};">{_esc(a["limit"])}</td></tr>'
+              f'</table>')
+        cards.append(
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            f'style="background:{bg};border-left:4px solid {fg};border-radius:6px;'
+            f'margin:0 0 11px;"><tr><td style="padding:12px 15px;">'
+            f'<div style="font:700 15px/1.3 {_FONT};color:{fg};">'
+            f'&#9888;&nbsp; {_esc(a["title"])}</div>{kv}'
+            f'<div style="font:400 13px/1.55 {_FONT};color:#475569;margin-top:9px;">'
+            f'{_esc(a["why"])}</div></td></tr></table>')
+    return ''.join(cards)
+
+
+def _html_doc(title, subtitle, iso, body_html, now_str):
+    """Wrap section cards in a header band + footer, centred at 640px."""
+    _cls, label, tier = iso
+    fg, bg = _C[_TIER[tier][0]], _C[_TIER[tier][1]]
+    badge = (f'<span style="display:inline-block;padding:6px 15px;border-radius:999px;'
+             f'background:{bg};color:{fg};font:700 14px/1.5 {_FONT};'
+             f'white-space:nowrap;">{_esc(label)}</span>')
+    header = (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="background:{_C["head"]};border-radius:10px;"><tr>'
+        f'<td style="padding:19px 20px;"><table role="presentation" width="100%"><tr>'
+        f'<td align="left" style="vertical-align:middle;">'
+        f'<div style="font:700 20px/1.25 {_FONT};color:#ffffff;">'
+        f'WLC High Bay &middot; {_esc(title)}</div>'
+        f'<div style="font:400 13px/1.4 {_FONT};color:{_C["headsub"]};margin-top:4px;">'
+        f'{_esc(subtitle)}</div></td>'
+        f'<td align="right" style="vertical-align:middle;white-space:nowrap;">{badge}</td>'
+        f'</tr></table></td></tr></table>')
+    footer = (
+        f'<div style="font:400 13px/1.7 {_FONT};color:{_C["muted"]};padding:6px 4px 0;">'
+        f'<b style="color:{_C["ink"]};">Instruction Manual:</b> '
+        f'<a href="{MANUAL_URL}" style="color:{_C["info"]};text-decoration:none;">{MANUAL_URL}</a><br>'
+        f'<b style="color:{_C["ink"]};">Sent:</b> {_esc(now_str)}<br>'
+        f'<b style="color:{_C["ink"]};">Location:</b> WLC High Bay (Wright Lab, Yale University)<br>'
+        f'<b style="color:{_C["ink"]};">Instrument:</b> Particles Plus Model 7301'
+        f'<p style="margin:12px 0 0;color:#94a3b8;font-size:12px;">'
+        'This report also proves the alert system is alive. If it stops arriving, '
+        'the cron entry or the mail path has failed.</p></div>')
+    return (
+        f'<div style="background:{_C["page"]};padding:22px 10px;font-family:{_FONT};">'
+        f'<table role="presentation" align="center" width="640" cellpadding="0" cellspacing="0" '
+        f'style="max-width:640px;margin:0 auto;">'
+        f'<tr><td>{header}</td></tr>'
+        f'<tr><td style="height:16px;line-height:16px;">&nbsp;</td></tr>'
+        f'<tr><td>{body_html}</td></tr>'
+        f'<tr><td>{footer}</td></tr>'
+        f'</table></div>')
+
+
+def digest_html(due, r, now_str):
+    """HTML twin of digest_body: alert cards + current conditions."""
+    n = len(due)
+    banner = (f'<div style="background:{_C["faultbg"]};color:{_C["fault"]};'
+              f'border-left:4px solid {_C["fault"]};padding:11px 14px;border-radius:5px;'
+              f'font:700 15px/1.4 {_FONT};margin-bottom:12px;">'
+              f'&#9888;&nbsp; {n} alert{"s" if n != 1 else ""} active</div>')
+    body = (_card('Active Alerts', banner + _html_alerts(due), accent='fault')
+            + _html_conditions(r))
+    iso = r.get('iso') or (None, 'ISO —', 'mute')
+    return _html_doc('Clean Room Alert', now_str, iso, body, now_str)
 
 
 # ── The 10-minute check ──────────────────────────────────────────────────────
@@ -634,7 +964,8 @@ def check_alerts():
         log(f"{a['key']} active but cooldown not expired")
 
     if due:
-        if send_email(digest_subject(due), digest_body(due, r, now_str)):
+        if send_email(digest_subject(due), digest_body(due, r, now_str),
+                      html=digest_html(due, r, now_str)):
             for a in due:
                 state[a['key']] = datetime.now().isoformat()
     if not DRY_RUN:
@@ -727,21 +1058,32 @@ def send_weekly_summary(days=7):
     lines += ['', 'ALERTS CURRENTLY ACTIVE', _RULE]
     if state:
         for key, when in sorted(state.items()):
-            lines.append(f"  {key:<28} since {when[:19].replace('T', ' ')}")
+            lines.append(f"  {_alert_label(key):<28} since {when[:19].replace('T', ' ')}")
     else:
-        lines.append('  none')
+        lines.append('  All clear — no conditions currently in alert.')
 
-    lines += ['', '', conditions_block(gather_readings()), '', _RULE,
-              f"Dashboard:  {DASHBOARD_URL}",
-              f"Sent:       {now.strftime('%Y-%m-%d %H:%M:%S')}",
+    r = gather_readings()
+    now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+    lines += ['', '', conditions_block(r), '', _RULE,
+              f"Instruction Manual:  {MANUAL_URL}",
+              f"Sent:       {now_str}",
               "Location:   WLC High Bay (Wright Lab, Yale University)",
               '',
-              "This report also proves the alert system is alive. If it stops",
+              "This report also proves the alert system is alive. If it stops "
               "arriving, the cron entry or the mail path has failed."
               ]
 
+    # HTML twin — same numbers, laid out as tables so nothing can misalign.
+    html_body = (_html_weekly_stats(len(rows), temps_f, rhs, ch1s)
+                 + _html_sensor_table(series)
+                 + _html_active_state(state)
+                 + _html_conditions(r))
+    html = _html_doc('Weekly Summary',
+                     f"{since.strftime('%b %d')} – {now.strftime('%b %d, %Y')}",
+                     r.get('iso') or (None, 'ISO —', 'mute'), html_body, now_str)
+
     ok = send_email(f"Weekly summary  {since.strftime('%b %d')} - {now.strftime('%b %d')}",
-                    '\n'.join(lines))
+                    '\n'.join(lines), html=html)
     log('Weekly summary sent.' if ok else 'Weekly summary FAILED — see the error above.')
     return ok
 

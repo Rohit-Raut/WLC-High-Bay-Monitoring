@@ -137,7 +137,7 @@ def _run_check(r, state=None):
     sent = []
     orig = (alerts.send_email, alerts.gather_readings,
             alerts.load_state, alerts.save_state)
-    alerts.send_email      = lambda s, b: (sent.append((s, b)), True)[1]
+    alerts.send_email      = lambda s, b, html=None: (sent.append((s, b)), True)[1]
     alerts.gather_readings = lambda: r
     alerts.load_state      = lambda: dict(state or {})
     alerts.save_state      = lambda s: None      # never touch the real state file
