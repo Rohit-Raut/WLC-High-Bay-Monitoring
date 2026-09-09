@@ -85,7 +85,12 @@ TEMP_HIGH_F         = 90.0    # degF - no clean room should ever reach this
 # >= 0.3 µm counts). The dashboard already reds at the ISO 9 line; this fires
 # only once the room is dirtier than the worst classified level.
 PARTICLE_HIGH_M3    = 102_000_000  # counts/m³ cumulative at 0.3 µm - worse than ISO 9
-OFFLINE_ALERT_MIN   = 90      # minutes without a new record before alerting
+OFFLINE_ALERT_MIN   = 10      # minutes without a new record before alerting.
+                              # The counter samples every ~1-2 min, so 10 min is
+                              # ~5-8 missed cycles — long enough to ride out a
+                              # single blip, short enough to be useful (90 min
+                              # meant learning the room was unmonitored an hour
+                              # and a half too late).
 
 # ── Distributed Shelly H&T sensors (features/temp_humidity_sensor) ────────────
 # The Shellys sit at fixed locations around the High Bay and report every ~5 min.

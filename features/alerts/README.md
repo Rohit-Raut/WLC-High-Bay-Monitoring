@@ -21,7 +21,7 @@ someone up. It should fire only when something is genuinely wrong in the lab.
 | Temperature too low | < 40 degF | Door left open in winter, heating failure |
 | Temperature too high | > 90 degF | No clean room should ever reach this |
 | Particle count high | > 102,000,000 /m³ cumulative at 0.3 µm | Dirtier than ISO 9 — off the classified scale |
-| Counter offline | > 90 min since last record | Instrument or logger failure |
+| Counter offline | > 10 min since last record | Instrument or logger failure |
 
 ISO 14644-1 stops at class 9, so "worse than the worst class" is the particle
 trigger. The standard defines no 0.3 µm limit for classes 7–9, so the number
@@ -301,6 +301,6 @@ RH_HIGH_PCT         = 90.0    # % RH upper limit
 TEMP_LOW_F          = 33.0    # degF lower limit
 TEMP_HIGH_F         = 120.0   # degF upper limit
 PARTICLE_HIGH_M3    = 100000  # counts/m³ at 0.3 µm
-OFFLINE_ALERT_MIN   = 90      # minutes before offline alert
+OFFLINE_ALERT_MIN   = 10      # minutes before offline alert
 COOLDOWN_HOURS      = 2       # hours between repeat alerts per condition
 ```
