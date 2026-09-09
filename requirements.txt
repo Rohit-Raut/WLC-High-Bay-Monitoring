@@ -1,2 +1,6 @@
 pymodbus>=3.5
 pyyaml>=6.0
+# CA root bundle for SMTP over TLS in features/alerts. Without a working CA
+# store, sending fails with CERTIFICATE_VERIFY_FAILED even on valid credentials
+# (see features/alerts/README.md → Troubleshooting).
+certifi>=2020.6.20

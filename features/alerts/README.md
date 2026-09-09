@@ -98,7 +98,7 @@ recovers its cooldown is dropped, so the next occurrence is never delayed.
 ## Weekly summary
 
 ```
-0 8 * * 1 cd /home/rraut/particle_plus && python3 features/alerts/alerts.py --weekly-summary
+0 8 * * 1 cd /home/rr979/particle_plus && python3 features/alerts/alerts.py --weekly-summary
 ```
 
 One report each Monday: 7-day min/mean/max for counter temperature, humidity
@@ -132,7 +132,7 @@ Credentials live in `alerts_secrets.py`, which is gitignored and never leaves
 the host:
 
 ```bash
-cd /home/rraut/particle_plus/features/alerts
+cd /home/rr979/particle_plus/features/alerts
 cp alerts_secrets.example.py alerts_secrets.py
 nano alerts_secrets.py
 ```
@@ -167,7 +167,7 @@ changed state — and there is nothing to remember to undo afterwards.
 ### Step 4: Dry run — see what would be sent, send nothing
 
 ```bash
-python3 /home/rraut/particle_plus/features/alerts/alerts.py --dry-run
+python3 /home/rr979/particle_plus/features/alerts/alerts.py --dry-run
 ```
 
 Every alert that would fire is printed in full, no mail leaves the machine, and
@@ -178,7 +178,7 @@ to sanity-check thresholds against real lab data before anything is delivered.
 ### Step 5: One real run
 
 ```bash
-python3 /home/rraut/particle_plus/features/alerts/alerts.py
+python3 /home/rr979/particle_plus/features/alerts/alerts.py
 ```
 
 Expect `All parameters within normal range.`
@@ -188,8 +188,8 @@ Expect `All parameters within normal range.`
 Run `crontab -e` and add both lines:
 
 ```
-*/10 * * * * cd /home/rraut/particle_plus && python3 features/alerts/alerts.py >> alert_cron.log 2>&1
-0 8 * * 1    cd /home/rraut/particle_plus && python3 features/alerts/alerts.py --weekly-summary >> alert_cron.log 2>&1
+*/10 * * * * cd /home/rr979/particle_plus && python3 features/alerts/alerts.py >> alert_cron.log 2>&1
+0 8 * * 1    cd /home/rr979/particle_plus && python3 features/alerts/alerts.py --weekly-summary >> alert_cron.log 2>&1
 ```
 
 The first runs the check every 10 minutes; the second sends the Monday-morning
@@ -228,6 +228,34 @@ still passing the account password.
 Spaces in the App Password are stripped automatically, so `abcd efgh ijkl mnop`
 and `abcdefghijklmnop` both work.
 
+**`[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate`** —
+the credentials are fine; the host has no CA root bundle for Python to verify
+Gmail's TLS certificate against. This typically appears after a Python reinstall
+or a host/user migration (e.g. `rraut` → `rr979`) that left the system
+`ca-certificates` out of place. `send_email()` now resolves a working bundle
+automatically — certifi first, then the system bundles — but certifi must be
+installed for the first path:
+
+```bash
+pip install -r requirements.txt      # or: pip install certifi
+```
+
+If it still fails after that, the network itself may be intercepting TLS (a
+proxy presenting its own certificate). Confirm which case you are in:
+
+```bash
+python3 -c "
+import smtplib, ssl, certifi
+s = smtplib.SMTP_SSL('smtp.gmail.com', 465,
+                     context=ssl.create_default_context(cafile=certifi.where()))
+print('TLS OK'); s.quit()"
+```
+
+`TLS OK` means the bundle fix worked. A still-failing verify with an unfamiliar
+issuer name points to a TLS-intercepting proxy on the new network — that needs
+the proxy's root CA added to the trust store (or an allowlist for
+`smtp.gmail.com:465`), which is a network/IT change, not a code one.
+
 **Mail sends but never arrives** — check spam and mark it not-spam once.
 Silently-filtered alerts are worse than no alerts.
 
@@ -251,7 +279,7 @@ ISO 8601 timestamp of the last alert for each condition key. Do not edit this
 file manually. To reset all cooldowns (force re-alert on next check):
 
 ```bash
-rm /home/rraut/particle_plus/data/alert_state.json
+rm /home/rr979/particle_plus/data/alert_state.json
 ```
 
 ---

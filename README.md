@@ -66,7 +66,7 @@ Airborne cleanliness class is evaluated automatically from the most recent sampl
 | Communication | Modbus TCP (IEEE 802.3) |
 | Counter IP | 10.66.66.68 |
 | Modbus port | 502 |
-| Host | noether cluster (rraut@noether) |
+| Host | noether cluster (rr979@noether) |
 
 ### Particle Size Channels
 
@@ -220,7 +220,7 @@ pip install -r requirements.txt
 
 ```bash
 # 1. Clone the repository
-cd /home/rraut/particle_plus
+cd /home/rr979/particle_plus
 git clone git@github.com:Rohit-Raut/WLC-High-Bay-Monitoring.git .
 
 # 2. Install dependency

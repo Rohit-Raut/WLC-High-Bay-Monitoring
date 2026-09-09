@@ -6,8 +6,8 @@ Reads the latest measurements from the live CSV written by particle_plus.py
 and sends an email alert when any monitored parameter crosses a threshold.
 
 Run from cron — the check every 10 minutes, the summary once a week:
-    */10 * * * * cd /home/rraut/particle_plus && python3 features/alerts/alerts.py
-    0 8 * * 1    cd /home/rraut/particle_plus && python3 features/alerts/alerts.py --weekly-summary
+    */10 * * * * cd /home/rr979/particle_plus && python3 features/alerts/alerts.py
+    0 8 * * 1    cd /home/rr979/particle_plus && python3 features/alerts/alerts.py --weekly-summary
 
 Alert conditions (thresholds all configurable below). From the counter:
     - Relative humidity < RH_LOW_PCT or > RH_HIGH_PCT
@@ -176,6 +176,35 @@ def cooldown_expired(state, key, hours=None):
         return True
 
 
+def _ssl_context():
+    """A TLS context whose CA bundle actually resolves on this host.
+
+    A plain ssl.create_default_context() trusts whatever CA store the local
+    OpenSSL build points at. On a freshly reinstalled Python — or a cluster
+    node whose home/user was migrated (rraut -> rr979) without the system
+    ca-certificates package in place — that store can be empty, and every send
+    then fails with 'CERTIFICATE_VERIFY_FAILED: unable to get local issuer
+    certificate' even though the Gmail credentials are perfectly valid. Try
+    certifi's bundled roots first (ships with pip, needs no root to install),
+    then the usual Linux system bundles, and only then the default. Verification
+    stays ON throughout — we fix WHERE the roots come from, never whether they
+    are checked.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+    for _ca in ('/etc/ssl/certs/ca-certificates.crt',   # Debian / Ubuntu
+                '/etc/pki/tls/certs/ca-bundle.crt'):      # RHEL / CentOS / Fedora
+        if os.path.exists(_ca):
+            try:
+                return ssl.create_default_context(cafile=_ca)
+            except Exception:
+                pass
+    return ssl.create_default_context()
+
+
 def send_email(subject, body):
     """Send a plain-text alert email via SMTP SSL.
 
@@ -195,7 +224,7 @@ def send_email(subject, body):
     msg['To']      = ', '.join(EMAIL_RECIPIENTS)
     msg.set_content(body)
 
-    context = ssl.create_default_context()
+    context = _ssl_context()
     try:
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
             server.login(EMAIL_SENDER, EMAIL_PASSWORD)
