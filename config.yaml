@@ -33,9 +33,10 @@ github:
   push_interval_s: 300       # Push every 5 minutes (0 = after every sample)
 
 thresholds:
-  # Display thresholds for dashboard (different from email alert thresholds)
-  temp_low_f: 32
-  temp_high_f: 110
+  # Indoor clean-tent bands. These now MATCH the email alert thresholds in
+  # features/alerts/alerts.py, so the dashboard and the email agree on "fine".
+  temp_low_f: 50
+  temp_high_f: 85
   rh_low_pct: 30
   rh_high_pct: 70
   env_warn_margin: 5         # Orange warning within this margin of limits

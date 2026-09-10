@@ -12,7 +12,7 @@ Run from cron — the check every 10 minutes, the summary once a week:
 Alert conditions (thresholds all configurable below). From the counter:
     - Relative humidity < RH_LOW_PCT or > RH_HIGH_PCT
     - Temperature < TEMP_LOW_F or > TEMP_HIGH_F
-    - Cumulative >=0.3 µm count > PARTICLE_HIGH_M3 (worse than ISO 9)
+    - Airborne cleanliness worse than ISO 8 (ISO 9 or off the scale)
     - No new record for > OFFLINE_ALERT_MIN minutes
 From each distributed Shelly H&T sensor:
     - Silent for > SENSOR_SILENT_HOURS (flat battery, broker or logger down)
@@ -71,20 +71,18 @@ STATE_FILE  = f'{BASE_DIR}/data/alert_state.json'
 LOG_FILE    = f'{BASE_DIR}/alert_log.txt'
 
 # ── Alert thresholds ──────────────────────────────────────────────────────────
-# These are EMERGENCY limits, deliberately wider than the dashboard's coloured
-# bands in config.yaml: the dashboard warns, this wakes someone up. Only fire
-# when something is genuinely wrong in the lab (HVAC dead, door left open in
-# winter, contamination event) — not on ordinary drift.
-RH_LOW_PCT          = 15.0    # % - severe static discharge risk
-RH_HIGH_PCT         = 85.0    # % - condensation on detector surfaces
-TEMP_LOW_F          = 40.0    # degF - door left open in winter / heating failure
-TEMP_HIGH_F         = 90.0    # degF - no clean room should ever reach this
-# ISO 14644-1 stops at class 9 — there is no class 10, so "off the scale" means
-# ABOVE the ISO 9 limit. The standard defines no 0.3 µm limit for classes 7-9,
-# so this uses the class formula 10^9 x (0.1/0.3)^2.08 ~= 102M /m³ (CUMULATIVE
-# >= 0.3 µm counts). The dashboard already reds at the ISO 9 line; this fires
-# only once the room is dirtier than the worst classified level.
-PARTICLE_HIGH_M3    = 102_000_000  # counts/m³ cumulative at 0.3 µm - worse than ISO 9
+# These deliberately MATCH the dashboard's coloured bands (config.yaml and the
+# notification center in particle_plus.py), so the two systems can never disagree
+# about what "fine" means: if the dashboard reds a value, the email fires on it,
+# and vice-versa. Indoor clean-tent bands, not survival extremes.
+RH_LOW_PCT          = 30.0    # % - below this, static / ESD risk to detector parts
+RH_HIGH_PCT         = 70.0    # % - above this, condensation and particle adhesion
+TEMP_LOW_F          = 50.0    # degF - indoors this cold means a door open / heat fail
+TEMP_HIGH_F         = 85.0    # degF - warmer than the assembly tent should ever run
+# Particle trigger is the ISO 14644-1 classification itself (see _worse_than_iso8),
+# NOT a single hand-picked number: the room alerts the moment it is dirtier than
+# ISO 8 — i.e. ISO 9 or off the scale — which is exactly the dashboard's red tier.
+# ISO 8 is the clean-tent assembly target; ISO 9 is the worst classified level.
 OFFLINE_ALERT_MIN   = 10      # minutes without a new record before alerting.
                               # The counter samples every ~1-2 min, so 10 min is
                               # ~5-8 missed cycles — long enough to ride out a
@@ -446,15 +444,18 @@ def evaluate(r):
             "Elevated temperature suggests an HVAC failure or an unusual thermal "
             "load in the clean room.")
 
-    ch1 = r.get('ch1_m3')
-    if ch1 is not None and ch1 > PARTICLE_HIGH_M3:
-        add('particle_high', 'HIGH PARTICLE COUNT',
-            f"HIGH PARTICLE COUNT: {ch1:,.0f} /m3 at 0.3um",
-            f"{ch1:,.0f} /m3 cumulative >=0.3 um",
-            f"above {PARTICLE_HIGH_M3:,} /m3",
-            "Dirtier than ISO 9, the worst classified level. Likely a "
-            "contamination event, heavy personnel activity, or filter "
-            "degradation. Check the size distribution on the dashboard.")
+    iso_cls, iso_label, _iso_tier = r.get('iso') or (None, 'ISO —', 'mute')
+    worse8, p05 = _worse_than_iso8(r.get('meas_row'))
+    if worse8:
+        cleanliness = iso_label if iso_cls else 'worse than ISO 9'
+        detail = (f"{cleanliness} (0.5 um {p05:,.0f} /m3 cumulative)"
+                  if p05 is not None else cleanliness)
+        add('particle_high', 'WORSE THAN ISO 8',
+            f"CLEANLINESS: {cleanliness}",
+            detail, "ISO 8 or cleaner (clean-tent assembly target)",
+            "The room is dirtier than ISO 8, the assembly target — ISO 9 or "
+            "worse. Likely a contamination event, heavy personnel activity, or "
+            "filter degradation. Check the size distribution on the dashboard.")
 
     off = r.get('offline_min')
     if off is not None and off > OFFLINE_ALERT_MIN:
@@ -561,6 +562,29 @@ def _iso_classify(rec):
         return (None, 'ISO —', 'mute')
     tier = 'ok' if cls <= 7 else ('warn' if cls == 8 else 'fault')
     return (cls, f'ISO {cls}', tier)
+
+
+def _worse_than_iso8(rec):
+    """(worse: bool, p05: float|None) — is the room dirtier than ISO 8?
+
+    True exactly when some MEASURED ISO-8-governed channel (0.5 / 1.0 / 5.0 µm)
+    exceeds its ISO 8 cumulative limit — which is precisely 'ISO 9 or off the
+    scale', the dashboard's red tier. It is defined on real measurements only, so
+    a missing field or an empty row can never fabricate an alert. `p05` is the
+    0.5 µm cumulative count, returned for the email to quote.
+    """
+    if not rec:
+        return (False, None)
+    worse = False
+    for ci in range(1, 7):
+        sz   = safe_float(rec.get(f'ch{ci}_size_um'))
+        conc = safe_float(rec.get(f'ch{ci}_sum_m3'))
+        if sz is None or conc is None:
+            continue
+        lim = _ISO_LIMITS.get((8, round(sz, 1)))
+        if lim is not None and conc > lim:
+            worse = True
+    return (worse, safe_float(rec.get('ch2_sum_m3')))
 
 
 # ── HTML mail styling ─────────────────────────────────────────────────────────

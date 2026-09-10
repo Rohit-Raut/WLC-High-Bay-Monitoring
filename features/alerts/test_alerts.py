@@ -49,11 +49,21 @@ def sensor(name, silent_h=0.02, temp_c=None, rh=None, never=False):
             'temp_c': temp_c, 'temp_f': round(temp_c * 9 / 5 + 32, 1), 'rh': rh}
 
 
+# A measurement row cleaner than ISO 8 (every governed channel under its limit),
+# and one dirtier than ISO 8 (0.5 µm cumulative over the ISO 8 limit of 3.52M).
+CLEAN_MEAS = {'ch1_size_um': '0.3', 'ch1_sum_m3': '900000',
+              'ch2_size_um': '0.5', 'ch2_sum_m3': '300000',
+              'ch3_size_um': '1.0', 'ch3_sum_m3': '70000',
+              'ch5_size_um': '5.0', 'ch5_sum_m3': '2000'}
+DIRTY_MEAS = dict(CLEAN_MEAS, ch2_sum_m3='4000000')   # 0.5 µm > 3,520,000 → worse than ISO 8
+
+
 def readings(sensors=(), **kw):
     """A healthy lab, overridable field by field."""
+    meas = kw.pop('meas_row', None)
     r = {'have_data': True, 'rh': MID_RH, 'temp_c': _f_to_c(MID_TF), 'temp_f': MID_TF,
          'ch1_m3': 1000.0, 'last_meas_dt': datetime.now(), 'offline_min': 1.0,
-         'sensors': list(sensors)}
+         'sensors': list(sensors), 'meas_row': meas, 'iso': alerts._iso_classify(meas)}
     r.update(kw)
     return r
 
@@ -70,7 +80,8 @@ def demo():
     assert keys(readings(temp_f=alerts.TEMP_HIGH_F + 1)) == ['temp_high']
     assert keys(readings(rh=alerts.RH_LOW_PCT - 1)) == ['rh_low']
     assert keys(readings(rh=alerts.RH_HIGH_PCT + 1)) == ['rh_high']
-    assert keys(readings(ch1_m3=alerts.PARTICLE_HIGH_M3 + 1)) == ['particle_high']
+    assert keys(readings(meas_row=DIRTY_MEAS)) == ['particle_high'], 'ISO 9 did not alert'
+    assert keys(readings(meas_row=CLEAN_MEAS)) == [], 'a clean room alerted on particles'
     assert keys(readings(offline_min=alerts.OFFLINE_ALERT_MIN + 1)) == ['counter_offline']
 
     # thresholds are exclusive: exactly at the limit is still fine

@@ -789,8 +789,9 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     )
 
     # Card colors follow status (user rule: red = bad, orange = approaching bad,
-    # green = good). Temp is bad outside 32–110 °F, RH outside 30–70 %; within
-    # ENV_WARN_MARGIN of a limit counts as "approaching" → orange.
+    # green = good). Temp is bad outside 50–85 °F, RH outside 30–70 %; within
+    # ENV_WARN_MARGIN of a limit counts as "approaching" → orange. These bands
+    # MATCH features/alerts/alerts.py so the dashboard and the email agree.
     ENV_WARN_MARGIN = 5.0   # °F and % RH
 
     def _band_cls(v, lo, hi):
@@ -802,7 +803,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
             return 'status-warn'
         return 'status-ok'
 
-    _temp_card_cls = _band_cls(_tf_num, 32.0, 110.0)
+    _temp_card_cls = _band_cls(_tf_num, 50.0, 85.0)
     _rh_card_cls   = _band_cls(_rh_num, 30.0, 70.0)
 
     def _status_card(lab, val, unit, cls):
@@ -1102,14 +1103,15 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     iso_lines_js = json.dumps(_iso_ref_lines)
 
     # ── notification center ────────────────────────────────────────────────────
-    # Env thresholds match the status-card bands (red outside, orange within
-    # ENV_WARN_MARGIN of a limit). NOTE: features/alerts/alerts.py email
-    # thresholds are wider (RH 20-90, temp 33-120 °F) and unchanged.
+    # Env thresholds match the status-card bands AND features/alerts/alerts.py:
+    # RH 30-70 %, temp 50-85 °F (red outside, orange within ENV_WARN_MARGIN of a
+    # limit), so the dashboard and the email agree on what "fine" means.
     # Tent target is ISO 8. ISO 14644-1 defines no 0.3 µm limit for ISO 7-9,
-    # so the 0.3 µm threshold uses the class formula 10^N x (0.1/D)^2.08:
-    # ISO 8 equivalent at 0.3 µm ~= 10,200,000 /m³ (cumulative).
+    # so this early-warning row uses the class formula 10^N x (0.1/D)^2.08:
+    # ISO 8 equivalent at 0.3 µm ~= 10,200,000 /m³ (cumulative). The hard ISO 9
+    # alert (dashboard badge + email) uses the full classification, not this row.
     _N_RH_LOW   = 30.0;  _N_RH_HIGH   = 70.0
-    _N_TF_LOW   = 32.0;  _N_TF_HIGH   = 110.0
+    _N_TF_LOW   = 50.0;  _N_TF_HIGH   = 85.0
     _N_P_HIGH   = 10_200_000
 
     # Read alert state written by alerts.py (if it exists)

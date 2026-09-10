@@ -8,24 +8,27 @@ the core logger are needed.
 
 ## Alert Conditions
 
-These are **emergency** limits, deliberately wider than the coloured bands the
-dashboard uses (`config.yaml` → `thresholds`). The dashboard warns; this wakes
-someone up. It should fire only when something is genuinely wrong in the lab.
+These limits **match the dashboard's coloured bands** (`config.yaml` →
+`thresholds`, and the notification center in `particle_plus.py`), so the two
+systems can never disagree about what "fine" means: whatever the dashboard reds,
+the email fires on, and vice-versa.
 
 ### From the particle counter
 
 | Condition | Threshold | Reason |
 |-----------|-----------|--------|
-| RH too low | < 15% | Severe electrostatic discharge risk to detector components |
-| RH too high | > 85% | Condensation and moisture risk |
-| Temperature too low | < 40 degF | Door left open in winter, heating failure |
-| Temperature too high | > 90 degF | No clean room should ever reach this |
-| Particle count high | > 102,000,000 /m³ cumulative at 0.3 µm | Dirtier than ISO 9 — off the classified scale |
+| RH too low | < 30% | Electrostatic discharge risk to detector components |
+| RH too high | > 70% | Condensation and particle adhesion |
+| Temperature too low | < 50 degF | Door left open, heating failure |
+| Temperature too high | > 85 degF | Warmer than the assembly tent should run |
+| Cleanliness worse than ISO 8 | ISO 9 or off the scale | Contamination event, heavy activity, or filter degradation |
 | Counter offline | > 10 min since last record | Instrument or logger failure |
 
-ISO 14644-1 stops at class 9, so "worse than the worst class" is the particle
-trigger. The standard defines no 0.3 µm limit for classes 7–9, so the number
-comes from the class formula: 10⁹ × (0.1/0.3)^2.08 ≈ 102M /m³.
+The particle trigger is the **ISO 14644-1 classification itself**, computed from
+the cumulative 0.5 / 1.0 / 5.0 µm channels exactly as the dashboard badge does —
+not a single hand-picked number. It fires the moment the room is dirtier than
+ISO 8 (the clean-tent assembly target), i.e. ISO 9 or worse, which is the same
+red tier the dashboard shows.
 
 ### From the distributed Shelly H&T sensors
 
@@ -296,11 +299,16 @@ rm /home/rr979/particle_plus/data/alert_state.json
 All thresholds are in the configuration block at the top of `alerts.py`:
 
 ```python
-RH_LOW_PCT          = 20.0    # % RH lower limit
-RH_HIGH_PCT         = 90.0    # % RH upper limit
-TEMP_LOW_F          = 33.0    # degF lower limit
-TEMP_HIGH_F         = 120.0   # degF upper limit
-PARTICLE_HIGH_M3    = 100000  # counts/m³ at 0.3 µm
+RH_LOW_PCT          = 30.0    # % RH lower limit
+RH_HIGH_PCT         = 70.0    # % RH upper limit
+TEMP_LOW_F          = 50.0    # degF lower limit
+TEMP_HIGH_F         = 85.0    # degF upper limit
 OFFLINE_ALERT_MIN   = 10      # minutes before offline alert
 COOLDOWN_HOURS      = 2       # hours between repeat alerts per condition
 ```
+
+The particle trigger has no tunable number — it is the ISO 14644-1 class
+(`_worse_than_iso8` / `_iso_classify`), firing when the room is dirtier than
+ISO 8. If you change the temp/RH limits here, change the matching dashboard
+bands too (`config.yaml` → `thresholds`, and `_N_TF_*` / `_N_RH_*` plus the
+status-card `_band_cls(...)` call in `particle_plus.py`) so the two stay in sync.
