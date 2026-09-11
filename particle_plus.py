@@ -927,7 +927,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
             (4320, 'Last 3 days'),
             (10080, 'Last 7 days'),
             (0, 'All data'),
-            (-1, 'Custom...'),
+            (-1, 'Custom range…'),
         ]
     else:
         # Public version: includes intermediate steps (2hr, 3hr, 12hr)
@@ -942,39 +942,16 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         for v, lab in _ranges)
 
     # ── range control ─────────────────────────────────────────────────────────
-    # LOCAL (full-archive) dashboard: absolute Start/End DAY pickers, bounded to
-    # the loaded data, replacing the relative "Last N" dropdown — so you can pull
-    # up an arbitrary window like Aug 01 → Aug 15. PUBLIC page keeps the relative
-    # dropdown (its data is only the last 30 days). Defaults to the last 7 days.
-    if _plot_timestamps:
-        _first_day = _plot_timestamps[0][:10]
-        _last_day  = _plot_timestamps[-1][:10]
-    else:
-        _first_day = _last_day = datetime.now().strftime('%Y-%m-%d')
-    try:
-        _default_start = max(_first_day,
-            (datetime.strptime(_last_day, '%Y-%m-%d') - timedelta(days=7)).strftime('%Y-%m-%d'))
-    except ValueError:
-        _default_start = _first_day
-
-    _di = ('padding:6px 8px;background:var(--bg-card);border:1px solid var(--border-color);'
-           'border-radius:5px;color:var(--text-primary);font-size:13px;color-scheme:light dark;')
+    # Both dashboards keep the relative "Last N" dropdown. The LOCAL (full-archive)
+    # page's list ends in "Custom range…", which opens a modal with Start/End DAY
+    # pickers (chart_interactions_local.js) for an absolute window like Aug 01-15.
+    # The local <select> has NO inline onchange — the JS wires it so a preset and
+    # the custom option are handled distinctly; the public page keeps onchange.
     if local:
         range_control_html = (
             '<div class="ctrl-group">\n'
-            '      <label>Date Range</label>\n'
-            '      <div style="display:flex;align-items:center;gap:6px;">\n'
-            f'        <input type="date" id="date-start" min="{_first_day}" max="{_last_day}" '
-            f'value="{_default_start}" style="{_di}">\n'
-            '        <span style="color:var(--text-secondary);font-size:13px;">to</span>\n'
-            f'        <input type="date" id="date-end" min="{_first_day}" max="{_last_day}" '
-            f'value="{_last_day}" style="{_di}">\n'
-            '        <button id="date-apply" type="button" style="padding:6px 12px;background:#286dc0;'
-            'border:1px solid #286dc0;border-radius:5px;color:#fff;cursor:pointer;font-size:13px;">'
-            'Apply</button>\n'
-            '      </div>\n'
-            '      <div id="date-range-err" role="alert" '
-            'style="display:none;color:#f87171;font-size:12px;margin-top:5px;"></div>\n'
+            '      <label>Time Range</label>\n'
+            f'      <select id="sel-range">{range_options_html}</select>\n'
             '    </div>'
         )
     else:
@@ -1037,33 +1014,29 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         '    <div id="chart-env" style="height:280px"></div>'
     ))
 
-    # Custom time range modal (local only)
-    custom_range_modal_html = '''
-    <!-- Custom Time Range Modal (LOCAL ONLY) -->
+    # Custom DATE-range modal (local only) — opened by the "Custom range…" option.
+    # Two day pickers; JS bounds them to the loaded data and validates End >= Start.
+    _dm = ('padding:8px 12px;background:var(--bg-primary);border:1px solid var(--border-color);'
+           'border-radius:5px;color:var(--text-primary);font-size:14px;color-scheme:light dark;')
+    custom_range_modal_html = ('''
+    <!-- Custom Date Range Modal (LOCAL ONLY) -->
     <div id="custom-range-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
          background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
       <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px;
            padding:24px 28px; max-width:400px; box-shadow:0 8px 24px rgba(0,0,0,0.5);">
-        <h3 style="margin:0 0 16px; color:var(--text-primary); font-size:18px;">Custom Time Range</h3>
-        <div style="margin-bottom:16px;">
-          <label style="display:block; margin-bottom:6px; color:var(--text-secondary); font-size:13px;">
-            Show last:
-          </label>
-          <div style="display:flex; gap:8px; align-items:center;">
-            <input type="number" id="custom-range-value" min="1" max="365" value="3"
-                   style="flex:1; padding:8px 12px; background:var(--bg-primary); border:1px solid var(--border-color);
-                   border-radius:5px; color:var(--text-primary); font-size:14px;" />
-            <select id="custom-range-unit"
-                    style="flex:1; padding:8px 12px; background:var(--bg-primary); border:1px solid var(--border-color);
-                    border-radius:5px; color:var(--text-primary); font-size:14px;">
-              <option value="60">minutes</option>
-              <option value="3600">hours</option>
-              <option value="86400" selected>days</option>
-            </select>
+        <h3 style="margin:0 0 16px; color:var(--text-primary); font-size:18px;">Custom Date Range</h3>
+        <div style="display:flex; gap:14px; margin-bottom:14px;">
+          <div style="flex:1;">
+            <label style="display:block; margin-bottom:6px; color:var(--text-secondary); font-size:13px;">Start date</label>
+            <input type="date" id="custom-start" style="''' + _dm + '''width:100%; box-sizing:border-box;" />
           </div>
-          <div style="margin-top:8px; color:var(--text-secondary); font-size:12px; font-style:italic;">
-            Example: "3 days" or "12 hours"
+          <div style="flex:1;">
+            <label style="display:block; margin-bottom:6px; color:var(--text-secondary); font-size:13px;">End date</label>
+            <input type="date" id="custom-end" style="''' + _dm + '''width:100%; box-sizing:border-box;" />
           </div>
+        </div>
+        <div style="margin-bottom:12px; color:var(--text-secondary); font-size:12px; font-style:italic;">
+          Whole days, e.g. Aug 01 to Aug 15. Bounded to the available data.
         </div>
         <div id="custom-range-error" style="display:none; color:#f87171; font-size:13px; margin-bottom:12px;">
         </div>
@@ -1074,14 +1047,14 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
             Cancel
           </button>
           <button id="custom-range-apply"
-                  style="padding:8px 16px; background:#0969da; border:1px solid #0969da;
+                  style="padding:8px 16px; background:#286dc0; border:1px solid #286dc0;
                   border-radius:5px; color:#ffffff; cursor:pointer; font-size:14px; font-weight:500;">
             Apply
           </button>
         </div>
       </div>
     </div>
-    ''' if local else ''
+    ''') if local else ''
 
     # ── ISO 14644-1:2015 classification ───────────────────────────────────────
     # Keyed by (class, size_um) → max cumulative particles/m³.

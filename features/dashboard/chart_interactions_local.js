@@ -302,26 +302,19 @@ function sliceIdx(mins) {
   return sliceIdxForArray(TS, mins);
 }
 
-// ── Absolute date-range window (LOCAL dashboard) ─────────────────────────────
-// The local page filters by an explicit [Start, End] DAY range instead of a
-// relative "last N". Start is taken at 00:00:00, End at 23:59:59, both local.
+// ── Time window: relative presets + one absolute custom range ────────────────
+// The Time Range dropdown drives a RELATIVE window ("last N"), exactly as before.
+// Picking its "Custom range…" option opens a modal with Start/End DAY pickers;
+// applying it sets CUSTOM_RANGE and the charts switch to that absolute window.
+// CUSTOM_RANGE is null in preset mode.
+var CUSTOM_RANGE = null;   // {startMs, endMs, startStr, endStr} when a custom range is active
+
 function _startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0); }
 function _endOfDay(d)   { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59); }
 
-// Read the two <input type="date"> boxes. Returns null when they aren't on the
-// page, else {ok, err} or {ok, startMs, endMs, startStr, endStr}.
-function _readDateRange() {
-  var si = document.getElementById('date-start');
-  var ei = document.getElementById('date-end');
-  if (!si || !ei) return null;
-  if (!si.value || !ei.value) return { ok: false, err: 'Pick a start and end date.' };
-  var s = _startOfDay(new Date(si.value + 'T00:00:00'));
-  var e = _endOfDay(new Date(ei.value + 'T00:00:00'));
-  if (isNaN(s.getTime()) || isNaN(e.getTime())) return { ok: false, err: 'Invalid date.' };
-  if (e.getTime() < s.getTime())
-    return { ok: false, err: "Start date can't be after end date." };
-  return { ok: true, startMs: s.getTime(), endMs: e.getTime(),
-           startStr: _toLocalStr(s), endStr: _toLocalStr(e) };
+function _toDayStr(ms) {
+  var d = new Date(ms), p = function (n) { return String(n).padStart(2, '0'); };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
 
 // Inclusive [i0, i1] bounds of the timestamps within [startMs, endMs] over a
@@ -337,6 +330,24 @@ function idxRangeForArray(tsArray, startMs, endMs) {
     i1 = k;
   }
   return [i0, i1];
+}
+
+// Resolve the current window into index bounds, the x-axis span, and an env
+// descriptor — the ONE place that knows whether we're in custom or preset mode.
+function _windowBounds() {
+  if (CUSTOM_RANGE) {
+    var b = idxRangeForArray(TS, CUSTOM_RANGE.startMs, CUSTOM_RANGE.endMs);
+    return { i0: b[0], i1: b[1], xLo: CUSTOM_RANGE.startStr, xHi: CUSTOM_RANGE.endStr,
+             win: { ok: true, startMs: CUSTOM_RANGE.startMs, endMs: CUSTOM_RANGE.endMs,
+                    startStr: CUSTOM_RANGE.startStr, endStr: CUSTOM_RANGE.endStr } };
+  }
+  var sel  = document.getElementById('sel-range');
+  var mins = sel ? parseInt(sel.value) : 0;
+  if (isNaN(mins) || mins < 0) mins = 0;         // "Custom…" (-1) before it's applied → All
+  var i0 = sliceIdxForArray(TS, mins);
+  var i1 = TS.length - 1;
+  return { i0: i0, i1: i1, xLo: (i1 >= i0 ? TS[i0] : TS[0]), xHi: TS[TS.length - 1],
+           win: { ok: false, mins: mins } };
 }
 
 // ── Env-chart helpers for the distributed Shelly sensors ─────────────────────
@@ -519,15 +530,15 @@ function _gapBrokenXY(ts, vals, i0, i1, leftMs, rightMs) {
   }
   return { x: x, y: y };
 }
-function renderEnvCohort(range, DARK) {
+function renderEnvCohort(win, DARK) {
   const infos = envStatuses();
-  // Window: the chosen [Start, End] when valid, else the full env span.
+  // Window: the applied custom [Start, End], else the preset's relative span.
   let leftMs, rightMs, leftStr, rightStr;
-  if (range && range.ok) {
-    leftMs = range.startMs; rightMs = range.endMs;
-    leftStr = range.startStr; rightStr = range.endStr;
+  if (win && win.ok) {
+    leftMs = win.startMs; rightMs = win.endMs;
+    leftStr = win.startStr; rightStr = win.endStr;
   } else {
-    const span = envTimeSpan(0);
+    const span = envTimeSpan(win ? win.mins : 0);
     leftMs = span ? _parseDate(span.left).getTime() : 0;
     rightMs = span ? _parseDate(span.right).getTime() : Date.now();
     leftStr = span ? span.left : null; rightStr = span ? span.right : null;
@@ -855,29 +866,16 @@ function filterAndRender() {
   const DARK = _baseLayout();   // current theme's layout — rebuilt every render
   renderChannelLegend();        // tick rows re-skin with the theme too
 
-  // ── Resolve the [Start, End] window from the date pickers ──────────────────
-  const range = _readDateRange();
-  const errEl = document.getElementById('date-range-err');
-  if (range && !range.ok) {                        // invalid (e.g. End < Start)
-    if (errEl) { errEl.textContent = range.err; errEl.style.display = 'block'; }
-    return Promise.resolve();                       // leave the last good view up
-  }
-  if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
-
-  // Index bounds over the sorted TS; with no pickers (shouldn't happen on the
-  // local page) fall back to all data. xLo/xHi pin the axis to the CHOSEN days
-  // even where data is sparse, so the window always reads as asked.
-  let i0 = 0, i1 = TS.length - 1, xLo = TS[0], xHi = TS[TS.length - 1];
-  if (range && range.ok) {
-    const b = idxRangeForArray(TS, range.startMs, range.endMs);
-    i0 = b[0]; i1 = b[1];
-    xLo = range.startStr; xHi = range.endStr;
-  }
+  // ── Resolve the window: preset (relative) or the applied custom range ───────
+  const W    = _windowBounds();
+  const i0   = W.i0, i1 = W.i1;
   const ts   = (i1 >= i0 && i0 >= 0) ? TS.slice(i0, i1 + 1) : [];
   const gaps = gapShapes(ts);
 
-  const xBounds = { maxallowed: xHi };
-  const xRange  = { range: [xLo, xHi], autorange: false };
+  // xLo/xHi pin the axis to the chosen window even where data is sparse, so a
+  // custom span always reads as asked.
+  const xBounds = { maxallowed: W.xHi };
+  const xRange  = { range: [W.xLo, W.xHi], autorange: false };
 
   // Bin selection (0 = Raw) — a separate dropdown, independent of the window.
   const binMins = _currentBinMins(0);
@@ -966,7 +964,7 @@ function filterAndRender() {
   // ── Environment section: sensor cards (View B) or cohort envelope (View C).
   // All rendering lives in renderEnv() above; it no-ops on markup it doesn't
   // recognize so a stale generated page can't throw here.
-  const p4 = renderEnv(range, DARK);
+  const p4 = renderEnv(W.win, DARK);
 
   updateStats(i0, i1);
   renderLocation(i0, i1);
@@ -1037,7 +1035,7 @@ let _zooming = false;
 function _stepZoom(direction) {
   if (_zooming) return;
   const sel = document.getElementById('sel-range');
-  if (!sel) return;   // date-range mode (local page): no relative-ladder zoom
+  if (!sel) return;   // defensive: no dropdown → no ladder zoom
 
   // last option on the steppable ladder (largest numeric value ≤ 7 days)
   const MAX_STEP_MINS = 7 * 24 * 60;
@@ -1062,6 +1060,10 @@ function _stepZoom(direction) {
   }
 
   sel.selectedIndex = newIndex;
+  CUSTOM_RANGE = null;            // stepping to a preset leaves custom mode
+  _resetCustomOptionLabel();
+  _lastPresetIdx = sel.selectedIndex;
+  _saveTimeRange();
   _zooming = true;
   filterAndRender().then(function () {
     _zooming = false;
@@ -1081,7 +1083,7 @@ function _stepZoom(direction) {
 // { passive: false } is required so that ev.preventDefault() can suppress the
 // browser's default page-scroll behaviour while the cursor is over a chart.
 window._attachWheelListeners = function () {
-  if (!document.getElementById('sel-range')) return;   // date-range mode: let the page scroll
+  if (!document.getElementById('sel-range')) return;   // defensive: no dropdown → no wheel zoom
   ['chart-counts', 'chart-pm', 'chart-env'].forEach(function (divId) {
     var el = document.getElementById(divId);
     if (!el) return;   // chart-pm is absent on the public dashboard
@@ -1107,7 +1109,7 @@ window._attachWheelListeners = function () {
 // relayout event that filterAndRender itself fires from triggering a
 // second recursive call.
 window._attachRelayoutListeners = function () {
-  if (!document.getElementById('sel-range')) return;   // date-range mode: no relayout→ladder bridge
+  if (!document.getElementById('sel-range')) return;   // defensive: no dropdown → no relayout bridge
   ['chart-counts', 'chart-pm', 'chart-env'].forEach(function (divId) {
     var el = document.getElementById(divId);
     // skip absent divs AND divs Plotly hasn't initialized — chart-env only
@@ -1181,38 +1183,42 @@ window._attachZoomOutButtonListeners = function () {
 var AUTO_REFRESH_MS = 5 * 60 * 1000;
 var _refreshTimer   = null;
 
-// The local page's range is an absolute [Start, End]; persist both date inputs
-// so a refresh (auto every 5 min, or manual) keeps the window you were looking
-// at. Clamped to each input's own min/max so a stored value can't fall outside
-// the data currently baked into the page.
+// Persist the current selection across the 5-min auto-refresh: either the preset
+// dropdown value, or an applied custom range as "custom:START:END" (day strings).
 function _restoreTimeRange() {
   try {
-    var s = sessionStorage.getItem('wlc-date-start');
-    var e = sessionStorage.getItem('wlc-date-end');
-    var si = document.getElementById('date-start');
-    var ei = document.getElementById('date-end');
-    if (si && s && (!si.min || s >= si.min) && (!si.max || s <= si.max)) si.value = s;
-    if (ei && e && (!ei.min || e >= ei.min) && (!ei.max || e <= ei.max)) ei.value = e;
+    var saved = sessionStorage.getItem('wlc-range');
+    if (saved === null) return;
+    if (saved.indexOf('custom:') === 0) {
+      var p  = saved.split(':');                 // ['custom', 'YYYY-MM-DD', 'YYYY-MM-DD']
+      var s  = _startOfDay(new Date(p[1] + 'T00:00:00'));
+      var e  = _endOfDay(new Date(p[2] + 'T00:00:00'));
+      if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && e.getTime() >= s.getTime()) {
+        CUSTOM_RANGE = { startMs: s.getTime(), endMs: e.getTime(),
+                         startStr: _toLocalStr(s), endStr: _toLocalStr(e) };
+        _selectCustomOption();
+        _setCustomOptionLabel(p[1], p[2]);
+      }
+      return;
+    }
+    var sel = document.getElementById('sel-range');
+    if (!sel) return;
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === saved) { sel.selectedIndex = i; break; }
+    }
   } catch (e) { /* sessionStorage unavailable → keep the default range */ }
 }
 
 function _saveTimeRange() {
   try {
-    var si = document.getElementById('date-start');
-    var ei = document.getElementById('date-end');
-    if (si) sessionStorage.setItem('wlc-date-start', si.value);
-    if (ei) sessionStorage.setItem('wlc-date-end', ei.value);
+    if (CUSTOM_RANGE) {
+      sessionStorage.setItem('wlc-range',
+        'custom:' + _toDayStr(CUSTOM_RANGE.startMs) + ':' + _toDayStr(CUSTOM_RANGE.endMs));
+    } else {
+      var sel = document.getElementById('sel-range');
+      if (sel) sessionStorage.setItem('wlc-range', sel.value);
+    }
   } catch (e) { /* ignore */ }
-}
-
-// Wire the two date inputs + Apply button to re-render on change.
-function _wireDateRange() {
-  ['date-start', 'date-end'].forEach(function (id) {
-    var el = document.getElementById(id);
-    if (el) el.addEventListener('change', function () { _saveTimeRange(); filterAndRender(); });
-  });
-  var apply = document.getElementById('date-apply');
-  if (apply) apply.addEventListener('click', function () { _saveTimeRange(); filterAndRender(); });
 }
 
 function _restoreBinSize() {
@@ -1314,73 +1320,90 @@ function _attachRefreshControl() {
   }
 }
 
-// ── LOCAL FEATURE: Custom Time Range Modal ────────────────────────────────────
-// Allows users to specify arbitrary time ranges (e.g., "Last 5 days", "Last 18 hours")
-function initCustomRangeModal() {
-  var modal = document.getElementById('custom-range-modal');
+// ── LOCAL FEATURE: Custom date-range modal ────────────────────────────────────
+// The last dropdown option ("Custom range…", value -1) opens this modal with
+// Start / End DAY pickers. Applying it switches the charts to that absolute
+// window (CUSTOM_RANGE); picking any preset switches back to relative mode.
+var _lastPresetIdx = 0;   // dropdown index to fall back to when the modal is cancelled
+
+function _customOption() {
   var sel = document.getElementById('sel-range');
-  var applyBtn = document.getElementById('custom-range-apply');
-  var cancelBtn = document.getElementById('custom-range-cancel');
-  var valueInput = document.getElementById('custom-range-value');
-  var unitSelect = document.getElementById('custom-range-unit');
-  var errorDiv = document.getElementById('custom-range-error');
+  if (!sel) return null;
+  for (var i = 0; i < sel.options.length; i++) {
+    if (parseInt(sel.options[i].value) === -1) return sel.options[i];
+  }
+  return null;
+}
+function _selectCustomOption() {
+  var opt = _customOption();
+  if (opt) opt.selected = true;
+}
+function _setCustomOptionLabel(startDay, endDay) {
+  var opt = _customOption();
+  if (opt) opt.text = '📅 ' + startDay + ' → ' + endDay;   // 📅 start → end
+}
+function _resetCustomOptionLabel() {
+  var opt = _customOption();
+  if (opt) opt.text = 'Custom range…';
+}
 
-  if (!modal || !sel) return;  // Modal not present (public dashboard)
+function initCustomRangeModal() {
+  var sel   = document.getElementById('sel-range');
+  var modal = document.getElementById('custom-range-modal');
+  if (!sel) return;                          // public dashboard: nothing to wire
 
-  // When dropdown changes to "Custom..." (-1), show modal
-  sel.addEventListener('change', function() {
+  // Dropdown change: a preset returns to relative mode; "Custom range…" opens the modal.
+  sel.addEventListener('change', function () {
     if (parseInt(sel.value) === -1) {
       showCustomRangeModal();
+    } else {
+      CUSTOM_RANGE = null;
+      _resetCustomOptionLabel();
+      _lastPresetIdx = sel.selectedIndex;
+      _saveTimeRange();
+      filterAndRender();
     }
   });
+  if (!sel.value || parseInt(sel.value) !== -1) _lastPresetIdx = sel.selectedIndex;
 
-  // Cancel button
-  if (cancelBtn) {
-    cancelBtn.addEventListener('click', function() {
-      hideCustomRangeModal();
-      restoreLastValidRange();
+  if (!modal) return;
+  var applyBtn  = document.getElementById('custom-range-apply');
+  var cancelBtn = document.getElementById('custom-range-cancel');
+  if (applyBtn)  applyBtn.addEventListener('click', applyCustomRange);
+  if (cancelBtn) cancelBtn.addEventListener('click', function () {
+    hideCustomRangeModal();
+    if (!CUSTOM_RANGE) { sel.selectedIndex = _lastPresetIdx; }   // undo the "Custom…" pick
+    else { _selectCustomOption(); }
+  });
+  ['custom-start', 'custom-end'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('keypress', function (e) {
+      if (e.key === 'Enter' && applyBtn) applyBtn.click();
     });
-  }
-
-  // Apply button
-  if (applyBtn) {
-    applyBtn.addEventListener('click', function() {
-      var value = parseInt(valueInput.value);
-      var unitSeconds = parseInt(unitSelect.value);
-
-      // Validation
-      if (isNaN(value) || value <= 0) {
-        showCustomRangeError('Please enter a positive number');
-        return;
-      }
-      if (value > 365 && unitSeconds === 86400) {
-        showCustomRangeError('Maximum 365 days allowed');
-        return;
-      }
-
-      var totalMinutes = Math.floor((value * unitSeconds) / 60);
-      applyCustomRange(totalMinutes, value, unitSeconds);
-    });
-  }
-
-  // Enter key to apply
-  if (valueInput) {
-    valueInput.addEventListener('keypress', function(e) {
-      if (e.key === 'Enter') applyBtn.click();
-    });
-  }
-
-  // Restore custom range on page load if it exists
-  restoreCustomRange();
+  });
 }
 
 function showCustomRangeModal() {
   var modal = document.getElementById('custom-range-modal');
-  if (modal) {
-    modal.style.display = 'flex';
-    document.getElementById('custom-range-value').focus();
-    document.getElementById('custom-range-error').style.display = 'none';
-  }
+  if (!modal) return;
+  var si = document.getElementById('custom-start');
+  var ei = document.getElementById('custom-end');
+  var firstDay = TS.length ? TS[0].slice(0, 10) : '';
+  var lastDay  = TS.length ? TS[TS.length - 1].slice(0, 10) : '';
+  // default span: the last 7 days of data, or the currently-applied custom range
+  var defStart = firstDay;
+  try {
+    var d = new Date(lastDay + 'T00:00:00'); d.setDate(d.getDate() - 7);
+    defStart = _toDayStr(d.getTime());
+    if (defStart < firstDay) defStart = firstDay;
+  } catch (e) { /* keep firstDay */ }
+  if (si) { si.min = firstDay; si.max = lastDay;
+            si.value = CUSTOM_RANGE ? _toDayStr(CUSTOM_RANGE.startMs) : defStart; }
+  if (ei) { ei.min = firstDay; ei.max = lastDay;
+            ei.value = CUSTOM_RANGE ? _toDayStr(CUSTOM_RANGE.endMs) : lastDay; }
+  hideCustomRangeError();
+  modal.style.display = 'flex';
+  if (si) si.focus();
 }
 
 function hideCustomRangeModal() {
@@ -1389,68 +1412,35 @@ function hideCustomRangeModal() {
 }
 
 function showCustomRangeError(msg) {
-  var errorDiv = document.getElementById('custom-range-error');
-  if (errorDiv) {
-    errorDiv.textContent = msg;
-    errorDiv.style.display = 'block';
-  }
+  var el = document.getElementById('custom-range-error');
+  if (el) { el.textContent = msg; el.style.display = 'block'; }
+}
+function hideCustomRangeError() {
+  var el = document.getElementById('custom-range-error');
+  if (el) el.style.display = 'none';
 }
 
-function applyCustomRange(totalMinutes, value, unitSeconds) {
-  var sel = document.getElementById('sel-range');
-
-  // Store custom range in sessionStorage
-  try {
-    sessionStorage.setItem('wlc-custom-mins', totalMinutes);
-    sessionStorage.setItem('wlc-custom-value', value);
-    sessionStorage.setItem('wlc-custom-unit', unitSeconds);
-  } catch (e) { /* ignore */ }
-
-  // Update dropdown: find if this value already exists, otherwise add it
-  var found = false;
-  for (var i = 0; i < sel.options.length; i++) {
-    if (parseInt(sel.options[i].value) === totalMinutes) {
-      sel.selectedIndex = i;
-      found = true;
-      break;
-    }
+function applyCustomRange() {
+  var si = document.getElementById('custom-start');
+  var ei = document.getElementById('custom-end');
+  if (!si || !ei || !si.value || !ei.value) {
+    showCustomRangeError('Pick a start and end date.'); return;
   }
-
-  if (!found) {
-    // Add custom option before "Custom..." option (which is last)
-    var unitName = unitSeconds === 86400 ? 'day' : unitSeconds === 3600 ? 'hour' : 'min';
-    if (value > 1) unitName += 's';
-    var customOption = document.createElement('option');
-    customOption.value = totalMinutes;
-    customOption.text = 'Last ' + value + ' ' + unitName;
-    sel.insertBefore(customOption, sel.options[sel.options.length - 1]);
-    sel.value = totalMinutes;
+  var s = _startOfDay(new Date(si.value + 'T00:00:00'));
+  var e = _endOfDay(new Date(ei.value + 'T00:00:00'));
+  if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+    showCustomRangeError('Invalid date.'); return;
   }
-
+  if (e.getTime() < s.getTime()) {                 // the requested guard
+    showCustomRangeError("Start date can't be after end date."); return;
+  }
+  CUSTOM_RANGE = { startMs: s.getTime(), endMs: e.getTime(),
+                   startStr: _toLocalStr(s), endStr: _toLocalStr(e) };
+  _selectCustomOption();
+  _setCustomOptionLabel(si.value, ei.value);
   hideCustomRangeModal();
+  _saveTimeRange();
   filterAndRender();
-}
-
-function restoreLastValidRange() {
-  var sel = document.getElementById('sel-range');
-  var saved = sessionStorage.getItem('wlc-range');
-  if (saved && saved !== '-1') {
-    sel.value = saved;
-  } else {
-    sel.value = '1440';  // Default to 24 hours
-  }
-}
-
-function restoreCustomRange() {
-  try {
-    var customMins = sessionStorage.getItem('wlc-custom-mins');
-    var customValue = sessionStorage.getItem('wlc-custom-value');
-    var customUnit = sessionStorage.getItem('wlc-custom-unit');
-
-    if (customMins && customValue && customUnit) {
-      applyCustomRange(parseInt(customMins), parseInt(customValue), parseInt(customUnit));
-    }
-  } catch (e) { /* ignore */ }
 }
 
 // ── Bin-size dropdown ─────────────────────────────────────────────────────────
@@ -1458,13 +1448,9 @@ function restoreCustomRange() {
 // inherits the existing <select> styling. Changing it re-renders the charts.
 function _attachBinControl() {
   if (document.getElementById('sel-bin')) return;          // idempotent
-  // Anchor next to the range control — the date pickers on the local page, or
-  // the legacy dropdown on the public page.
-  var anchor = document.getElementById('date-end')
-            || document.getElementById('date-start')
-            || document.getElementById('sel-range');
-  if (!anchor) return;
-  var rangeGroup = anchor.closest('.ctrl-group') || anchor.parentNode;
+  var rangeSel = document.getElementById('sel-range');
+  if (!rangeSel) return;
+  var rangeGroup = rangeSel.closest('.ctrl-group') || rangeSel.parentNode;
 
   var group = document.createElement('div');
   group.className = 'ctrl-group';
@@ -1508,9 +1494,8 @@ function _attachThemeToggle() {
 }
 
 // ── Initial render ────────────────────────────────────────────────────────────
-_restoreTimeRange();   // restore the [Start, End] window across reloads
-_wireDateRange();      // LOCAL: re-render when the date pickers change
-initCustomRangeModal();   // legacy no-op once the relative dropdown is gone (guards internally)
+_restoreTimeRange();   // restore the preset OR the applied custom range across reloads
+initCustomRangeModal();   // wire the dropdown + the custom date-range modal
 _attachBinControl();   // inject the Bin dropdown before the first render
 filterAndRender();
 // Attach wheel listeners after charts exist in the DOM.
