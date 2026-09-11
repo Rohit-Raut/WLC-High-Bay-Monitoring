@@ -302,6 +302,43 @@ function sliceIdx(mins) {
   return sliceIdxForArray(TS, mins);
 }
 
+// ── Absolute date-range window (LOCAL dashboard) ─────────────────────────────
+// The local page filters by an explicit [Start, End] DAY range instead of a
+// relative "last N". Start is taken at 00:00:00, End at 23:59:59, both local.
+function _startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0); }
+function _endOfDay(d)   { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59); }
+
+// Read the two <input type="date"> boxes. Returns null when they aren't on the
+// page, else {ok, err} or {ok, startMs, endMs, startStr, endStr}.
+function _readDateRange() {
+  var si = document.getElementById('date-start');
+  var ei = document.getElementById('date-end');
+  if (!si || !ei) return null;
+  if (!si.value || !ei.value) return { ok: false, err: 'Pick a start and end date.' };
+  var s = _startOfDay(new Date(si.value + 'T00:00:00'));
+  var e = _endOfDay(new Date(ei.value + 'T00:00:00'));
+  if (isNaN(s.getTime()) || isNaN(e.getTime())) return { ok: false, err: 'Invalid date.' };
+  if (e.getTime() < s.getTime())
+    return { ok: false, err: "Start date can't be after end date." };
+  return { ok: true, startMs: s.getTime(), endMs: e.getTime(),
+           startStr: _toLocalStr(s), endStr: _toLocalStr(e) };
+}
+
+// Inclusive [i0, i1] bounds of the timestamps within [startMs, endMs] over a
+// chronologically-sorted array. Returns [-1, -2] (an empty range) when none fall
+// inside — callers treat i1 < i0 as "no data in window".
+function idxRangeForArray(tsArray, startMs, endMs) {
+  var i0 = -1, i1 = -2;
+  for (var k = 0; k < tsArray.length; k++) {
+    var t = _parseDate(tsArray[k]).getTime();
+    if (t < startMs) continue;
+    if (t > endMs) break;              // sorted → everything past here is later
+    if (i0 === -1) i0 = k;
+    i1 = k;
+  }
+  return [i0, i1];
+}
+
 // ── Env-chart helpers for the distributed Shelly sensors ─────────────────────
 // The x window must span the counter AND every sensor series — anchoring to
 // LIVE_TS alone would clip sensor reports newer than the last counter sample
@@ -465,13 +502,15 @@ function renderEnvCards() {
 const COHORT_BIN_MS = 15 * 60 * 1000;
 const COHORT_GAP_MS = 3 * COHORT_BIN_MS;
 
-function _gapBrokenXY(ts, vals, i0, leftMs) {
-  const bin = binByTime(ts.slice(i0), vals.slice(i0), COHORT_BIN_MS);
+function _gapBrokenXY(ts, vals, i0, i1, leftMs, rightMs) {
+  const hi  = (typeof i1 === 'number' && i1 >= i0) ? i1 + 1 : ts.length;
+  const bin = binByTime(ts.slice(i0, hi), vals.slice(i0, hi), COHORT_BIN_MS);
   const x = [], y = [];
   let prev = null;
   for (let k = 0; k < bin.x.length; k++) {
     const t = _parseDate(bin.x[k]).getTime();
-    if (leftMs && t < leftMs) continue;                  // clip to visible window
+    if (leftMs  && t < leftMs)  continue;                // clip to visible window
+    if (rightMs && t > rightMs) continue;
     if (prev !== null && t - prev > COHORT_GAP_MS) {     // break the line
       x.push(_toLocalStr(new Date(prev + COHORT_BIN_MS))); y.push(null);
     }
@@ -480,17 +519,27 @@ function _gapBrokenXY(ts, vals, i0, leftMs) {
   }
   return { x: x, y: y };
 }
-function renderEnvCohort(mins, DARK) {
-  const infos    = envStatuses();
-  const span     = envTimeSpan(mins);
-  const envRange = span ? { range: [span.left, span.right], autorange: false } : {};
-  const leftMs   = span ? _parseDate(span.left).getTime() : 0;
+function renderEnvCohort(range, DARK) {
+  const infos = envStatuses();
+  // Window: the chosen [Start, End] when valid, else the full env span.
+  let leftMs, rightMs, leftStr, rightStr;
+  if (range && range.ok) {
+    leftMs = range.startMs; rightMs = range.endMs;
+    leftStr = range.startStr; rightStr = range.endStr;
+  } else {
+    const span = envTimeSpan(0);
+    leftMs = span ? _parseDate(span.left).getTime() : 0;
+    rightMs = span ? _parseDate(span.right).getTime() : Date.now();
+    leftStr = span ? span.left : null; rightStr = span ? span.right : null;
+  }
+  const envRange = leftStr ? { range: [leftStr, rightStr], autorange: false } : {};
   const anySel   = !!_envHighlight;
   const traces   = [];
   infos.forEach(function (xi) {
-    const i0   = sliceIdxForArray(xi.site.ts, mins);
-    const tSer = _gapBrokenXY(xi.site.ts, xi.site.temp, i0, leftMs);
-    const hSer = _gapBrokenXY(xi.site.ts, xi.site.rh,   i0, leftMs);
+    const b    = idxRangeForArray(xi.site.ts, leftMs, rightMs);
+    const i0   = b[0] >= 0 ? b[0] : xi.site.ts.length;   // empty → slice nothing
+    const tSer = _gapBrokenXY(xi.site.ts, xi.site.temp, i0, b[1], leftMs, rightMs);
+    const hSer = _gapBrokenXY(xi.site.ts, xi.site.rh,   i0, b[1], leftMs, rightMs);
     const sel  = xi.site.name === _envHighlight;
     const col  = _traceColor(xi.color);
     const wT   = anySel ? (sel ? 2.6 : 1.1) : 1.8;
@@ -508,7 +557,7 @@ function renderEnvCohort(mins, DARK) {
     margin: { l: 48, r: 58, t: 26, b: 46 },
     showlegend: false,
     xaxis:  Object.assign({}, DARK.xaxis, { title: '' },
-                          span ? { maxallowed: span.right } : {}, envRange),
+                          rightStr ? { maxallowed: rightStr } : {}, envRange),
     yaxis:  Object.assign({}, DARK.yaxis, {
       title: { text: 'Temperature (°C)', standoff: 6 },
       nticks: 6, fixedrange: true }),
@@ -548,7 +597,7 @@ function _setEnvView(view, highlight) {
   sessionStorage.setItem('wlc-env-hl', _envHighlight || '');
   filterAndRender();
 }
-function renderEnv(mins, DARK) {
+function renderEnv(range, DARK) {
   const cards = document.getElementById('env-cards');
   const chart = document.getElementById('chart-env');
   if (!cards || !chart) return Promise.resolve();   // stale/foreign markup — skip
@@ -563,7 +612,7 @@ function renderEnv(mins, DARK) {
   const bCohort = document.getElementById('env-btn-cohort');
   if (bCards)  bCards.setAttribute('aria-pressed', String(!cohort));
   if (bCohort) bCohort.setAttribute('aria-pressed', String(cohort));
-  if (cohort) { renderEnvChips(); return renderEnvCohort(mins, DARK); }
+  if (cohort) { renderEnvChips(); return renderEnvCohort(range, DARK); }
   renderEnvCards();
   return Promise.resolve();
 }
@@ -597,10 +646,12 @@ function getLeftBound(divId, mins) {
   return tsArray[idx] || null;
 }
 
-function sliceTraces(traces, i) {
+function sliceTraces(traces, i0, i1) {
+  const lo = Math.max(i0, 0);
+  const ok = i1 >= lo;
   return traces.map(tr => Object.assign({}, tr, {
-    x: tr.x.slice(i),
-    y: tr.y.slice(i),
+    x: ok ? tr.x.slice(lo, i1 + 1) : [],
+    y: ok ? tr.y.slice(lo, i1 + 1) : [],
   }));
 }
 
@@ -706,12 +757,14 @@ function isoAnnotations() {
 // The window is always [i0 … end of data], so a span is in view iff it ends at
 // or after i0. Names are de-duplicated keeping the LAST occurrence, so where the
 // counter is NOW is always the rightmost entry even if it moved back and forth.
-function _locationsInWindow(i0) {
+function _locationsInWindow(i0, i1) {
   if (typeof LOC_SPANS === 'undefined' || !Array.isArray(LOC_SPANS)) return [];
+  if (i1 === undefined) i1 = TS.length - 1;
   const out = [];
   for (let k = 0; k < LOC_SPANS.length; k++) {
+    const start = LOC_SPANS[k][0];
     const end = (k + 1 < LOC_SPANS.length) ? LOC_SPANS[k + 1][0] - 1 : TS.length - 1;
-    if (end < i0) continue;                       // span ended before the window
+    if (end < i0 || start > i1) continue;         // span outside the window
     const name = LOC_SPANS[k][1];
     const seen = out.indexOf(name);
     if (seen !== -1) out.splice(seen, 1);         // keep the later mention
@@ -727,10 +780,10 @@ function _esc(s) {
 
 // One quiet line above the plot. Empty string when there is nothing to say —
 // `.chart-loc:empty` then collapses it so it costs no vertical space.
-function renderLocation(i0) {
+function renderLocation(i0, i1) {
   const el = document.getElementById('chart-loc');
   if (!el) return;                                 // public page has no such div
-  const locs = _locationsInWindow(i0);
+  const locs = (i1 >= i0 && i0 >= 0) ? _locationsInWindow(i0, i1) : [];
   if (!locs.length) { el.innerHTML = ''; return; }
   // An arrow, not a comma: two names in one window means the counter MOVED
   // during it, and the data on either side was taken somewhere different.
@@ -739,10 +792,13 @@ function renderLocation(i0) {
   el.innerHTML = '<span class="loc-k">Location:</span> ' + body;
 }
 
-function updateStats(i) {
-  const ts    = TS.slice(i);
-  const ch1   = COUNTS[0].y.slice(i).filter(v => v !== null && v !== undefined);
-  const ch2   = COUNTS[1].y.slice(i).filter(v => v !== null && v !== undefined);
+function updateStats(i0, i1) {
+  const lo    = Math.max(i0, 0);
+  const ok    = i1 >= lo;
+  const hi    = ok ? i1 + 1 : lo;                  // ok==false → empty slices
+  const ts    = TS.slice(lo, hi);
+  const ch1   = COUNTS[0].y.slice(lo, hi).filter(v => v !== null && v !== undefined);
+  const ch2   = COUNTS[1].y.slice(lo, hi).filter(v => v !== null && v !== undefined);
   const n     = ts.length;
   const fmt   = v => (v !== null && !isNaN(v))
     ? Math.round(v).toLocaleString() + ' /m³' : '--';
@@ -798,27 +854,39 @@ function calculatePMLogRange(pmTraces) {
 function filterAndRender() {
   const DARK = _baseLayout();   // current theme's layout — rebuilt every render
   renderChannelLegend();        // tick rows re-skin with the theme too
-  const sel  = document.getElementById('sel-range');
-  const mins = parseInt(sel.value);
-  const i    = sliceIdx(mins);
-  const ts   = TS.slice(i);
+
+  // ── Resolve the [Start, End] window from the date pickers ──────────────────
+  const range = _readDateRange();
+  const errEl = document.getElementById('date-range-err');
+  if (range && !range.ok) {                        // invalid (e.g. End < Start)
+    if (errEl) { errEl.textContent = range.err; errEl.style.display = 'block'; }
+    return Promise.resolve();                       // leave the last good view up
+  }
+  if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+
+  // Index bounds over the sorted TS; with no pickers (shouldn't happen on the
+  // local page) fall back to all data. xLo/xHi pin the axis to the CHOSEN days
+  // even where data is sparse, so the window always reads as asked.
+  let i0 = 0, i1 = TS.length - 1, xLo = TS[0], xHi = TS[TS.length - 1];
+  if (range && range.ok) {
+    const b = idxRangeForArray(TS, range.startMs, range.endMs);
+    i0 = b[0]; i1 = b[1];
+    xLo = range.startStr; xHi = range.endStr;
+  }
+  const ts   = (i1 >= i0 && i0 >= 0) ? TS.slice(i0, i1 + 1) : [];
   const gaps = gapShapes(ts);
 
-  // maxallowed: prevents the chart from drifting into the future.
-  // Explicit range: resets the viewport to the exact selected window on every render.
-  const xBounds = ts.length > 0 ? { maxallowed: TS[TS.length - 1] } : {};
-  const xRange  = ts.length > 0
-    ? { range: [ts[0], ts[ts.length - 1]], autorange: false }
-    : {};
+  const xBounds = { maxallowed: xHi };
+  const xRange  = { range: [xLo, xHi], autorange: false };
 
-  // Bin selection (0 = Raw) — available for every time window, online and local.
-  const binMins = _currentBinMins(mins);
+  // Bin selection (0 = Raw) — a separate dropdown, independent of the window.
+  const binMins = _currentBinMins(0);
   const binMs   = binMins * 60000;
   // _themedTraces runs BEFORE binning so the binned mean/max traces inherit
   // the theme-corrected channel color too. _visibleTraces then drops the
   // channels unticked in the shared tick legend (both charts, same state).
-  const countsRaw  = _visibleTraces(_themedTraces(sliceTraces(COUNTS, i)));
-  const pmRaw      = _visibleTraces(_themedTraces(sliceTraces(PM, i)));
+  const countsRaw  = _visibleTraces(_themedTraces(sliceTraces(COUNTS, i0, i1)));
+  const pmRaw      = _visibleTraces(_themedTraces(sliceTraces(PM, i0, i1)));
   const countsData = binMins > 0 ? _binnedTraces(countsRaw, binMs) : countsRaw;
   const pmData     = binMins > 0 ? _binnedTraces(pmRaw, binMs)     : pmRaw;
 
@@ -898,10 +966,10 @@ function filterAndRender() {
   // ── Environment section: sensor cards (View B) or cohort envelope (View C).
   // All rendering lives in renderEnv() above; it no-ops on markup it doesn't
   // recognize so a stale generated page can't throw here.
-  const p4 = renderEnv(mins, DARK);
+  const p4 = renderEnv(range, DARK);
 
-  updateStats(i);
-  renderLocation(i);
+  updateStats(i0, i1);
+  renderLocation(i0, i1);
 
   return Promise.all([p1, p2, p3, p4]);
 }
@@ -969,6 +1037,7 @@ let _zooming = false;
 function _stepZoom(direction) {
   if (_zooming) return;
   const sel = document.getElementById('sel-range');
+  if (!sel) return;   // date-range mode (local page): no relative-ladder zoom
 
   // last option on the steppable ladder (largest numeric value ≤ 7 days)
   const MAX_STEP_MINS = 7 * 24 * 60;
@@ -1012,6 +1081,7 @@ function _stepZoom(direction) {
 // { passive: false } is required so that ev.preventDefault() can suppress the
 // browser's default page-scroll behaviour while the cursor is over a chart.
 window._attachWheelListeners = function () {
+  if (!document.getElementById('sel-range')) return;   // date-range mode: let the page scroll
   ['chart-counts', 'chart-pm', 'chart-env'].forEach(function (divId) {
     var el = document.getElementById(divId);
     if (!el) return;   // chart-pm is absent on the public dashboard
@@ -1037,6 +1107,7 @@ window._attachWheelListeners = function () {
 // relayout event that filterAndRender itself fires from triggering a
 // second recursive call.
 window._attachRelayoutListeners = function () {
+  if (!document.getElementById('sel-range')) return;   // date-range mode: no relayout→ladder bridge
   ['chart-counts', 'chart-pm', 'chart-env'].forEach(function (divId) {
     var el = document.getElementById(divId);
     // skip absent divs AND divs Plotly hasn't initialized — chart-env only
@@ -1110,21 +1181,38 @@ window._attachZoomOutButtonListeners = function () {
 var AUTO_REFRESH_MS = 5 * 60 * 1000;
 var _refreshTimer   = null;
 
+// The local page's range is an absolute [Start, End]; persist both date inputs
+// so a refresh (auto every 5 min, or manual) keeps the window you were looking
+// at. Clamped to each input's own min/max so a stored value can't fall outside
+// the data currently baked into the page.
 function _restoreTimeRange() {
   try {
-    var saved = sessionStorage.getItem('wlc-range');
-    if (saved === null) return;
-    var sel = document.getElementById('sel-range');
-    for (var i = 0; i < sel.options.length; i++) {
-      if (sel.options[i].value === saved) { sel.selectedIndex = i; break; }
-    }
+    var s = sessionStorage.getItem('wlc-date-start');
+    var e = sessionStorage.getItem('wlc-date-end');
+    var si = document.getElementById('date-start');
+    var ei = document.getElementById('date-end');
+    if (si && s && (!si.min || s >= si.min) && (!si.max || s <= si.max)) si.value = s;
+    if (ei && e && (!ei.min || e >= ei.min) && (!ei.max || e <= ei.max)) ei.value = e;
   } catch (e) { /* sessionStorage unavailable → keep the default range */ }
 }
 
 function _saveTimeRange() {
   try {
-    sessionStorage.setItem('wlc-range', document.getElementById('sel-range').value);
+    var si = document.getElementById('date-start');
+    var ei = document.getElementById('date-end');
+    if (si) sessionStorage.setItem('wlc-date-start', si.value);
+    if (ei) sessionStorage.setItem('wlc-date-end', ei.value);
   } catch (e) { /* ignore */ }
+}
+
+// Wire the two date inputs + Apply button to re-render on change.
+function _wireDateRange() {
+  ['date-start', 'date-end'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('change', function () { _saveTimeRange(); filterAndRender(); });
+  });
+  var apply = document.getElementById('date-apply');
+  if (apply) apply.addEventListener('click', function () { _saveTimeRange(); filterAndRender(); });
 }
 
 function _restoreBinSize() {
@@ -1370,9 +1458,13 @@ function restoreCustomRange() {
 // inherits the existing <select> styling. Changing it re-renders the charts.
 function _attachBinControl() {
   if (document.getElementById('sel-bin')) return;          // idempotent
-  var rangeSel = document.getElementById('sel-range');
-  if (!rangeSel) return;
-  var rangeGroup = rangeSel.closest('.ctrl-group') || rangeSel.parentNode;
+  // Anchor next to the range control — the date pickers on the local page, or
+  // the legacy dropdown on the public page.
+  var anchor = document.getElementById('date-end')
+            || document.getElementById('date-start')
+            || document.getElementById('sel-range');
+  if (!anchor) return;
+  var rangeGroup = anchor.closest('.ctrl-group') || anchor.parentNode;
 
   var group = document.createElement('div');
   group.className = 'ctrl-group';
@@ -1416,8 +1508,9 @@ function _attachThemeToggle() {
 }
 
 // ── Initial render ────────────────────────────────────────────────────────────
-_restoreTimeRange();   // keep the user's zoom level across reloads
-initCustomRangeModal();   // LOCAL ONLY: initialize custom time range modal
+_restoreTimeRange();   // restore the [Start, End] window across reloads
+_wireDateRange();      // LOCAL: re-render when the date pickers change
+initCustomRangeModal();   // legacy no-op once the relative dropdown is gone (guards internally)
 _attachBinControl();   // inject the Bin dropdown before the first render
 filterAndRender();
 // Attach wheel listeners after charts exist in the DOM.

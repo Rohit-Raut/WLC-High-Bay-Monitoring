@@ -941,6 +941,50 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
         f'<option value="{v}"{" selected" if v == 1440 else ""}>{lab}</option>'
         for v, lab in _ranges)
 
+    # ── range control ─────────────────────────────────────────────────────────
+    # LOCAL (full-archive) dashboard: absolute Start/End DAY pickers, bounded to
+    # the loaded data, replacing the relative "Last N" dropdown — so you can pull
+    # up an arbitrary window like Aug 01 → Aug 15. PUBLIC page keeps the relative
+    # dropdown (its data is only the last 30 days). Defaults to the last 7 days.
+    if _plot_timestamps:
+        _first_day = _plot_timestamps[0][:10]
+        _last_day  = _plot_timestamps[-1][:10]
+    else:
+        _first_day = _last_day = datetime.now().strftime('%Y-%m-%d')
+    try:
+        _default_start = max(_first_day,
+            (datetime.strptime(_last_day, '%Y-%m-%d') - timedelta(days=7)).strftime('%Y-%m-%d'))
+    except ValueError:
+        _default_start = _first_day
+
+    _di = ('padding:6px 8px;background:var(--bg-card);border:1px solid var(--border-color);'
+           'border-radius:5px;color:var(--text-primary);font-size:13px;color-scheme:light dark;')
+    if local:
+        range_control_html = (
+            '<div class="ctrl-group">\n'
+            '      <label>Date Range</label>\n'
+            '      <div style="display:flex;align-items:center;gap:6px;">\n'
+            f'        <input type="date" id="date-start" min="{_first_day}" max="{_last_day}" '
+            f'value="{_default_start}" style="{_di}">\n'
+            '        <span style="color:var(--text-secondary);font-size:13px;">to</span>\n'
+            f'        <input type="date" id="date-end" min="{_first_day}" max="{_last_day}" '
+            f'value="{_last_day}" style="{_di}">\n'
+            '        <button id="date-apply" type="button" style="padding:6px 12px;background:#286dc0;'
+            'border:1px solid #286dc0;border-radius:5px;color:#fff;cursor:pointer;font-size:13px;">'
+            'Apply</button>\n'
+            '      </div>\n'
+            '      <div id="date-range-err" role="alert" '
+            'style="display:none;color:#f87171;font-size:12px;margin-top:5px;"></div>\n'
+            '    </div>'
+        )
+    else:
+        range_control_html = (
+            '<div class="ctrl-group">\n'
+            '      <label>Time Range</label>\n'
+            f'      <select id="sel-range" onchange="filterAndRender()">{range_options_html}</select>\n'
+            '    </div>'
+        )
+
     updated_label    = 'Generated' if local else 'Last Data Updated'
     local_badge_html = '<span class="local-badge">LOCAL</span>' if local else ''
     is_local_js      = 'true' if local else 'false'
@@ -1715,10 +1759,7 @@ def generate_dashboard_html(csv_path, output_path, days=30, env_days=8,
     <div class="sub">Particulate &amp; Environmental Monitor<span class="sub-sep">&middot;</span>Particles Plus 7301<span class="sub-sep">&middot;</span>CRP Assembly Tent</div>
   </div>
   <div class="controls">
-    <div class="ctrl-group">
-      <label>Time Range</label>
-      <select id="sel-range" onchange="filterAndRender()">{range_options_html}</select>
-    </div>
+    {range_control_html}
     <div class="updated">{updated_label}: {updated}</div>
     {notif_panel_html}
     <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme">
